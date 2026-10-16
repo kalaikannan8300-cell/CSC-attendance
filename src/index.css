@@ -78,6 +78,8 @@ button:focus-visible, input:focus-visible { outline: 3px solid rgba(76, 116, 94,
 
 .admin-login-shell { min-height: 100vh; display: grid; grid-template-columns: 55% 45%; background: white; }
 .admin-login-card { width: min(100%, 520px); margin: auto; padding: 50px; }
+.admin-login-card > .brand { width: min(100%, 180px); height: auto; min-height: 0; overflow: visible; border-radius: 0; box-shadow: none; }
+.admin-login-card > .brand img { width: 100%; height: auto; object-fit: contain; }
 .admin-login-heading { margin: 70px 0 34px; }
 .admin-login-heading h1 { margin: 0 0 14px; font: 600 clamp(35px, 4vw, 52px)/1.07 Manrope, sans-serif; letter-spacing: -.045em; }
 .admin-login-heading > p:last-child { color: var(--muted); line-height: 1.6; }
