@@ -244,7 +244,10 @@ function AttendancePieChart({
 function Brand({ light = false }: { light?: boolean }) {
   return (
     <div className={`brand ${light ? "brand-light" : ""}`}>
-      <img src="/assets/csc-logo.png" alt="CSC Computer Software College" />
+      <img
+        src="/assets/csc-logo.png?v=20261016-2"
+        alt="CSC Computer Software College"
+      />
     </div>
   )
 }
@@ -2784,7 +2787,7 @@ function AdminDashboard({
         <div className="sidebar-profile">
           <div className="avatar">
             <img
-              src="/assets/csc-profile.png"
+              src="/assets/csc-icon.png?v=20261016-2"
               alt="CSC Computer Software College"
             />
           </div>
