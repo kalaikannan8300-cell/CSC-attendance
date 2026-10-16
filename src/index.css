@@ -49,8 +49,9 @@ button:focus-visible, input:focus-visible { outline: 3px solid rgba(76, 116, 94,
 .dots button.active { width: 36px; background: var(--accent); }
 .promo-footer p { margin: 0; }
 .login-panel { min-height: 100vh; padding: clamp(28px, 5vw, 84px); display: flex; flex-direction: column; background: white; }
-.student-login-brand { display: flex; flex: 0 0 auto; justify-content: flex-end; }
-.student-login-brand .brand { width: 128px; height: 74px; }
+.student-login-brand { display: flex; flex: 0 0 auto; justify-content: flex-end; margin-bottom: 16px; }
+.student-login-brand .brand { width: min(100%, 160px); height: auto; overflow: visible; }
+.student-login-brand .brand img { width: 100%; height: auto; object-fit: contain; }
 .mobile-view-switch { display: none; }
 .login-content { width: min(100%, 450px); margin: auto; }
 .india-clock { margin: 0 0 20px; display: flex; align-items: center; justify-content: center; gap: 8px; color: #68766f; font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
@@ -327,7 +328,7 @@ button:focus-visible, input:focus-visible { outline: 3px solid rgba(76, 116, 94,
   .promo-description, .benefits { display: none; }
   .promo-footer { padding-top: 14px; }
   .login-panel { min-height: auto; padding: 34px 24px 24px; }
-  .student-login-brand .brand { width: 112px; height: 64px; }
+  .student-login-brand .brand { width: min(100%, 160px); }
   .mobile-view-switch { position: absolute; display: block; top: 26px; right: 24px; z-index: 5; }
   .login-content { width: 100%; margin: 0 auto; }
   .login-heading { margin-bottom: 28px; }
