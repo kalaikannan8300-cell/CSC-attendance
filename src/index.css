@@ -21,6 +21,9 @@ button, input, select, textarea { font: inherit; }
 button { cursor: pointer; }
 button:focus-visible, input:focus-visible { outline: 3px solid rgba(76, 116, 94, .22); outline-offset: 2px; }
 
+.student-shell { min-height: 100vh; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); background: white; }
+.promo-panel { min-height: 100vh; position: relative; background-color: #f4f5f2; background-position: center; background-size: cover; isolation: isolate; transition: background-image .45s ease; }
+.promo-overlay { position: absolute; inset: 0; z-index: -1; background: linear-gradient(180deg, rgba(8, 14, 11, .18) 0%, rgba(8, 14, 11, .04) 40%, rgba(8, 14, 11, .22) 100%); }
 .brand { width: 160px; height: 92px; display: grid; place-items: center; overflow: hidden; background: white; border-radius: 12px; box-shadow: 0 2px 12px rgba(14, 19, 16, .09); }
 .brand img { width: 100%; height: 100%; display: block; object-fit: contain; }
 .view-switch { padding: 4px; display: flex; gap: 3px; background: #f1f2ef; border-radius: 12px; }
@@ -296,7 +299,9 @@ button:focus-visible, input:focus-visible { outline: 3px solid rgba(76, 116, 94,
 }
 
 @media (max-width: 760px) {
-  .login-panel { min-height: 100vh; padding: 26px 24px 24px; }
+  .student-shell { display: flex; flex-direction: column; }
+  .promo-panel { min-height: 310px; }
+  .login-panel { min-height: auto; flex: 1; padding: 26px 24px 24px; }
   .student-login-brand .brand { width: 100%; max-width: 180px; }
   .login-content { width: 100%; margin: 0 auto; }
   .login-heading { margin-bottom: 28px; }

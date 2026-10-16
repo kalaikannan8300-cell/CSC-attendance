@@ -339,6 +339,28 @@ function ViewSwitch({
   )
 }
 
+function PromotionPanel({
+  promotions,
+  activeIndex,
+}: {
+  promotions: Promotion[]
+  activeIndex: number
+}) {
+  const activePromotions = promotions.filter((promotion) => promotion.enabled)
+  const current =
+    activePromotions[activeIndex % Math.max(activePromotions.length, 1)]
+
+  return (
+    <section
+      className="promo-panel"
+      style={current ? { backgroundImage: `url("${current.source}")` } : undefined}
+      aria-hidden="true"
+    >
+      <div className="promo-overlay" />
+    </section>
+  )
+}
+
 function StatusCard({
   state,
   onDone,
@@ -2911,10 +2933,10 @@ function AdminDashboard({
             <div className="dashboard-tip">
               <Icon name="shield" />
               <p>
-                <strong>Promotional images are not shown on Student login</strong>
+                <strong>Changes appear automatically</strong>
                 <span>
-                  Images remain available here for management but are not
-                  displayed on the Student Attendance page.
+                  Enabled promotions rotate on the student login page. The first
+                  image is shown by default.
                 </span>
               </p>
             </div>
@@ -2928,6 +2950,29 @@ function AdminDashboard({
 export default function App() {
   const [view, setView] = useState<AppView>("student")
   const [promotions, setPromotions] = useState<Promotion[]>([])
+  const [activeIndex, setActiveIndex] = useState(0)
+
+  useEffect(() => {
+    const enabledCount = promotions.filter(
+      (promotion) => promotion.enabled,
+    ).length
+    if (activeIndex >= enabledCount) setActiveIndex(0)
+    const interval = window.setInterval(() => {
+      setActiveIndex((index) =>
+        enabledCount > 0 ? (index + 1) % enabledCount : 0,
+      )
+    }, 6000)
+    return () => window.clearInterval(interval)
+  }, [promotions, activeIndex])
+
+  useEffect(() => {
+    promotionApi
+      .publicList()
+      .then(({ promotions: items }) => setPromotions(items))
+      .catch((error) =>
+        console.error("Unable to load login page images.", error),
+      )
+  }, [])
 
   const loginAdmin = async (username: string, password: string) => {
     await adminApi.login(username, password)
@@ -2955,5 +3000,10 @@ export default function App() {
     )
   }
 
-  return <StudentLogin view={view} setView={setView} />
+  return (
+    <div className="student-shell">
+      <PromotionPanel promotions={promotions} activeIndex={activeIndex} />
+      <StudentLogin view={view} setView={setView} />
+    </div>
+  )
 }
