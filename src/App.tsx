@@ -245,7 +245,7 @@ function Brand({ light = false }: { light?: boolean }) {
   return (
     <div className={`brand ${light ? "brand-light" : ""}`}>
       <img
-        src="/assets/csc-logo.png?v=20261016-2"
+        src="/assets/csc-logo.png?v=20261016-3"
         alt="CSC Computer Software College"
       />
     </div>
@@ -2787,7 +2787,7 @@ function AdminDashboard({
         <div className="sidebar-profile">
           <div className="avatar">
             <img
-              src="/assets/csc-icon.png?v=20261016-2"
+              src="/assets/csc-icon.png?v=20261016-3"
               alt="CSC Computer Software College"
             />
           </div>
