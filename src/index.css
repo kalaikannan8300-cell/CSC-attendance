@@ -33,7 +33,7 @@ button:focus-visible, input:focus-visible { outline: 3px solid rgba(76, 116, 94,
 .login-panel { min-height: 100vh; padding: clamp(28px, 5vw, 84px); display: flex; flex-direction: column; background: white; }
 .login-panel-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
 .student-login-brand { display: flex; flex: 0 0 auto; justify-content: flex-end; }
-.student-login-brand .brand { width: 100%; max-width: 180px; height: auto; min-height: 0; overflow: visible; }
+.student-login-brand .brand { width: 100%; max-width: 180px; height: auto; min-height: 0; overflow: hidden; border-radius: 16px; box-shadow: 0 2px 12px rgba(14, 19, 16, .09); }
 .student-login-brand .brand img { width: 100%; max-width: 180px; height: auto; object-fit: contain; }
 .login-content { width: min(100%, 450px); margin: auto; }
 .india-clock { margin: 0 0 20px; display: flex; align-items: center; justify-content: center; gap: 8px; color: #68766f; font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
@@ -78,7 +78,7 @@ button:focus-visible, input:focus-visible { outline: 3px solid rgba(76, 116, 94,
 
 .admin-login-shell { min-height: 100vh; display: grid; grid-template-columns: 55% 45%; background: white; }
 .admin-login-card { width: min(100%, 520px); margin: auto; padding: 50px; }
-.admin-login-card > .brand { width: min(100%, 180px); height: auto; min-height: 0; overflow: visible; border-radius: 0; box-shadow: none; }
+.admin-login-card > .brand { width: min(100%, 180px); height: auto; min-height: 0; overflow: hidden; border-radius: 16px; box-shadow: 0 2px 12px rgba(14, 19, 16, .09); }
 .admin-login-card > .brand img { width: 100%; height: auto; object-fit: contain; }
 .admin-login-heading { margin: 70px 0 34px; }
 .admin-login-heading h1 { margin: 0 0 14px; font: 600 clamp(35px, 4vw, 52px)/1.07 Manrope, sans-serif; letter-spacing: -.045em; }
