@@ -314,15 +314,13 @@ function TextField({
 function ViewSwitch({
   view,
   setView,
-  light = false,
 }: {
   view: AppView
   setView: (view: AppView) => void
-  light?: boolean
 }) {
   return (
     <nav
-      className={`view-switch ${light ? "view-switch-light" : ""}`}
+      className="view-switch"
       aria-label="Portal navigation"
     >
       <button
@@ -343,18 +341,10 @@ function ViewSwitch({
 
 function PromotionPanel({
   promotions,
-  loadError,
   activeIndex,
-  setActiveIndex,
-  view,
-  setView,
 }: {
   promotions: Promotion[]
-  loadError: string
   activeIndex: number
-  setActiveIndex: (index: number) => void
-  view: AppView
-  setView: (view: AppView) => void
 }) {
   const activePromotions = promotions.filter((promotion) => promotion.enabled)
   const current =
@@ -366,64 +356,6 @@ function PromotionPanel({
       style={current ? { backgroundImage: `url("${current.source}")` } : undefined}
     >
       <div className="promo-overlay" />
-      <div className="promo-top">
-        <ViewSwitch view={view} setView={setView} light />
-      </div>
-      <div className="promo-content">
-        {loadError && (
-          <p className="promo-description" role="alert">
-            Login page images are temporarily unavailable.
-          </p>
-        )}
-        <p className="eyebrow">Learn. Practice. Succeed.</p>
-        <h1>
-          Build your skills.
-          <br />
-          Build your future.
-        </h1>
-        <p className="promo-description">
-          Practical learning for ambitious students ready to move forward with
-          confidence.
-        </p>
-        <ul className="benefits">
-          {[
-            "Practical Computer Training",
-            "Career-Focused Learning",
-            "Supportive Learning Environment",
-          ].map((benefit) => (
-            <li key={benefit}>
-              <span>
-                <Icon name="check" />
-              </span>
-              {benefit}
-            </li>
-          ))}
-        </ul>
-      </div>
-      <div className="promo-footer">
-        <div
-          className="dots"
-          aria-label={
-            activePromotions.length
-              ? `Promotion ${activeIndex + 1} of ${activePromotions.length}`
-              : "No active promotions"
-          }
-        >
-          {activePromotions.map((promotion, index) => (
-            <button
-              key={promotion.id}
-              className={index === activeIndex ? "active" : ""}
-              onClick={() => setActiveIndex(index)}
-              aria-label={`Show promotion ${index + 1}`}
-            />
-          ))}
-        </div>
-        <p>
-          {activePromotions.length
-            ? `${String(activeIndex + 1).padStart(2, "0")} / ${String(activePromotions.length).padStart(2, "0")}`
-            : "No promotions"}
-        </p>
-      </div>
     </section>
   )
 }
@@ -3008,7 +2940,6 @@ function AdminDashboard({
 export default function App() {
   const [view, setView] = useState<AppView>("student")
   const [promotions, setPromotions] = useState<Promotion[]>([])
-  const [promotionLoadError, setPromotionLoadError] = useState("")
   const [activeIndex, setActiveIndex] = useState(0)
 
   useEffect(() => {
@@ -3029,12 +2960,9 @@ export default function App() {
       .publicList()
       .then(({ promotions: items }) => {
         setPromotions(items)
-        setPromotionLoadError("")
       })
       .catch((error) =>
-        setPromotionLoadError(
-          error instanceof Error ? error.message : "Unable to load login page images.",
-        ),
+        console.error("Unable to load login page images.", error),
       )
   }, [])
 
@@ -3068,11 +2996,7 @@ export default function App() {
     <div className="student-shell">
       <PromotionPanel
         promotions={promotions}
-        loadError={promotionLoadError}
         activeIndex={activeIndex}
-        setActiveIndex={setActiveIndex}
-        view={view}
-        setView={setView}
       />
       <div className="mobile-view-switch">
         <ViewSwitch view={view} setView={setView} />

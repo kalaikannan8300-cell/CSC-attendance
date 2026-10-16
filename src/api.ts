@@ -198,6 +198,65 @@ export class ApiError extends Error {
   }
 }
 
+async function readJsonResponse(response: Response): Promise<Record<string, unknown>> {
+  const responseStatus = response.ok ? 502 : response.status
+  const invalidResponseMessage = response.ok
+    ? "The attendance service returned an empty or invalid response. Please try again."
+    : `The attendance service returned an invalid error response (HTTP ${response.status}).`
+
+  let text: string
+  try {
+    text = await response.text()
+  } catch {
+    throw new ApiError(
+      "The attendance service response was interrupted. Please try again.",
+      responseStatus,
+      "INVALID_API_RESPONSE",
+    )
+  }
+
+  if (!text.trim()) {
+    throw new ApiError(
+      invalidResponseMessage,
+      responseStatus,
+      "INVALID_API_RESPONSE",
+    )
+  }
+
+  const contentType = response.headers.get("Content-Type")?.split(";")[0].trim().toLowerCase()
+  if (
+    contentType !== "application/json" &&
+    !contentType?.endsWith("+json")
+  ) {
+    throw new ApiError(
+      invalidResponseMessage,
+      responseStatus,
+      "INVALID_API_RESPONSE",
+    )
+  }
+
+  let result: unknown
+  try {
+    result = JSON.parse(text)
+  } catch {
+    throw new ApiError(
+      invalidResponseMessage,
+      responseStatus,
+      "INVALID_API_RESPONSE",
+    )
+  }
+
+  if (!result || typeof result !== "object" || Array.isArray(result)) {
+    throw new ApiError(
+      invalidResponseMessage,
+      responseStatus,
+      "INVALID_API_RESPONSE",
+    )
+  }
+
+  return result as Record<string, unknown>
+}
+
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const headers = new Headers(options.headers)
 
@@ -219,7 +278,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   } catch (error) {
     if (error instanceof TypeError) {
       throw new ApiError(
-        "Cannot reach the attendance API. Check that npm run dev is running, then try again.",
+        "Cannot reach the attendance API. Check your connection and try again.",
 
         0,
       )
@@ -228,23 +287,21 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     throw error
   }
 
-  const result = (await response.json()) as T & {
-    error?: string
-
-    code?: string
-  }
+  const result = await readJsonResponse(response)
 
   if (!response.ok) {
     throw new ApiError(
-      result.error ?? "The request could not be completed.",
+      typeof result.error === "string"
+        ? result.error
+        : `The request could not be completed (HTTP ${response.status}).`,
 
       response.status,
 
-      result.code,
+      typeof result.code === "string" ? result.code : undefined,
     )
   }
 
-  return result
+  return result as T
 }
 
 export const adminApi = {
@@ -377,11 +434,13 @@ async function downloadReport(path: string): Promise<Blob> {
   }
 
   if (!response.ok) {
-    const result = (await response.json()) as { error?: string; code?: string }
+    const result = await readJsonResponse(response)
     throw new ApiError(
-      result.error ?? "The report could not be downloaded.",
+      typeof result.error === "string"
+        ? result.error
+        : `The report could not be downloaded (HTTP ${response.status}).`,
       response.status,
-      result.code,
+      typeof result.code === "string" ? result.code : undefined,
     )
   }
   const contentType = response.headers.get("Content-Type") ?? ""

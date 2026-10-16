@@ -144,6 +144,86 @@ test("student check-out uses the same-origin authenticated route without a clien
   assert.equal(result.attendance.status, "completed")
 })
 
+test("student check-in sends the expected same-origin request and parses JSON", async () => {
+  let requestUrl
+  let requestOptions
+
+  globalThis.fetch = async (url, options) => {
+    requestUrl = url
+    requestOptions = options
+    return new Response(
+      JSON.stringify({
+        attendance: {
+          id: 12,
+          markedAt: "2026-10-16T08:00:00.000Z",
+          exitTime: null,
+          status: "entry_recorded",
+        },
+      }),
+      { status: 201, headers: { "Content-Type": "application/json; charset=utf-8" } },
+    )
+  }
+
+  const result = await attendanceApi.mark("CSC1001")
+
+  assert.equal(requestUrl, "/api/attendance")
+  assert.equal(requestOptions.method, "POST")
+  assert.equal(requestOptions.credentials, "same-origin")
+  assert.deepEqual(JSON.parse(requestOptions.body), {
+    registerNumber: "CSC1001",
+  })
+  assert.equal(result.attendance.status, "entry_recorded")
+})
+
+test("attendance API reports an empty success response instead of throwing a JSON parse error", async () => {
+  globalThis.fetch = async () => new Response("", { status: 200 })
+
+  await assert.rejects(
+    attendanceApi.mark("CSC1001"),
+    (error) =>
+      error instanceof ApiError &&
+      error.status === 502 &&
+      error.code === "INVALID_API_RESPONSE" &&
+      error.message.includes("empty or invalid response") &&
+      !error.message.includes("Unexpected end of JSON"),
+  )
+})
+
+test("attendance API reports malformed JSON with a useful service error", async () => {
+  globalThis.fetch = async () =>
+    new Response('{"error":', {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    })
+
+  await assert.rejects(
+    attendanceApi.mark("CSC1001"),
+    (error) =>
+      error instanceof ApiError &&
+      error.status === 502 &&
+      error.code === "INVALID_API_RESPONSE" &&
+      error.message.includes("empty or invalid response"),
+  )
+})
+
+test("attendance API reports non-JSON server errors without exposing the response body", async () => {
+  globalThis.fetch = async () =>
+    new Response("<html>upstream failure</html>", {
+      status: 502,
+      headers: { "Content-Type": "text/html" },
+    })
+
+  await assert.rejects(
+    attendanceApi.mark("CSC1001"),
+    (error) =>
+      error instanceof ApiError &&
+      error.status === 502 &&
+      error.code === "INVALID_API_RESPONSE" &&
+      error.message.includes("invalid error response") &&
+      !error.message.includes("<html>"),
+  )
+})
+
 test("student check-in session is restored from its HttpOnly same-origin cookie", async () => {
   let requestUrl
   let requestOptions

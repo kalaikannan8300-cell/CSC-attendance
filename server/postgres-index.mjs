@@ -2614,15 +2614,15 @@ export function createPostgresApiServer({
 
       return send(res, 404, { error: "Not found." })
     } catch (error) {
-      if (res.headersSent) return res.destroy(error)
-
       const status = Number.isInteger(error.status) ? error.status : 500
 
       if (status >= 500)
         console.error(
-          "PostgreSQL API error:",
+          `PostgreSQL API error (${req.method} ${req.url?.split("?")[0] ?? "/"}, ${error.code ?? "UNEXPECTED_ERROR"}):`,
           error.cause?.message ?? error.message,
         )
+
+      if (res.headersSent) return res.destroy(error)
 
       return send(res, status, {
         error:
