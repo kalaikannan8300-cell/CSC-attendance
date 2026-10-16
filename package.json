@@ -1,0 +1,38 @@
+{
+  "name": "figma-make-app",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "start": "node --env-file-if-exists=.env server/postgres-index.mjs",
+    "start:sqlite": "node --env-file-if-exists=.env server/index.mjs",
+    "dev": "node --env-file-if-exists=.env scripts/dev-postgres.mjs",
+    "dev:sqlite": "node scripts/dev.mjs",
+    "build": "vite build",
+    "preview": "vite preview",
+    "format": "oxfmt",
+    "test": "node --test",
+    "start:postgres": "node --env-file-if-exists=.env server/postgres-index.mjs",
+    "db:setup": "node --env-file-if-exists=.env server/postgres-index.mjs --setup-only",
+    "admin:password:reset": "node --env-file-if-exists=.env scripts/reset-admin-password.mjs",
+    "db:import:sqlite": "node --env-file-if-exists=.env scripts/import-sqlite-to-postgres.mjs",
+    "dev:postgres": "vite --host 127.0.0.1"
+  },
+  "dependencies": {
+    "cloudinary": "^2.11.0",
+    "pg": "^8.16.3",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.0.0",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^6.0.0",
+    "oxfmt": "^0.2.0",
+    "tailwindcss": "^4.0.0",
+    "typescript": "^5.7.0",
+    "vite": "^8.0.5"
+  }
+}

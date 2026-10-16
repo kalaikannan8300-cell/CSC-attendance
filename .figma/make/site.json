@@ -1,0 +1,10 @@
+{
+  "description": "Streamline student attendance with an easy-to-use login system that allows students to mark their attendance using only their Register Number.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}
