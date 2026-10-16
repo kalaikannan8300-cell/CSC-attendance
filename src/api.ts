@@ -450,8 +450,6 @@ async function downloadReport(path: string): Promise<Blob> {
 }
 
 export const promotionApi = {
-  publicList: () =>
-    request<{ promotions: PromotionRecord[] }>("/api/promotions"),
   list: () => request<{ promotions: PromotionRecord[] }>("/api/admin/promotions"),
   upload: (file: File, title: string) => {
     const data = new FormData()

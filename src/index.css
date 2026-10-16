@@ -21,9 +21,6 @@ button, input, select, textarea { font: inherit; }
 button { cursor: pointer; }
 button:focus-visible, input:focus-visible { outline: 3px solid rgba(76, 116, 94, .22); outline-offset: 2px; }
 
-.student-shell { min-height: 100vh; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); background: white; }
-.promo-panel { min-height: 100vh; position: relative; padding: clamp(24px, 4vw, 64px); color: white; background-position: center; background-size: cover; display: flex; flex-direction: column; isolation: isolate; transition: background-image .45s ease; }
-.promo-overlay { position: absolute; inset: 0; z-index: -1; background: linear-gradient(180deg, rgba(8, 14, 11, .58) 0%, rgba(8, 14, 11, .14) 40%, rgba(8, 14, 11, .78) 100%); }
 .brand { width: 160px; height: 92px; display: grid; place-items: center; overflow: hidden; background: white; border-radius: 12px; box-shadow: 0 2px 12px rgba(14, 19, 16, .09); }
 .brand img { width: 100%; height: 100%; display: block; object-fit: contain; }
 .view-switch { padding: 4px; display: flex; gap: 3px; background: #f1f2ef; border-radius: 12px; }
@@ -31,10 +28,10 @@ button:focus-visible, input:focus-visible { outline: 3px solid rgba(76, 116, 94,
 .view-switch button.active { background: white; color: var(--ink); box-shadow: 0 1px 5px rgba(20, 24, 21, .08); }
 .eyebrow, .section-label { margin: 0 0 16px; text-transform: uppercase; letter-spacing: .15em; font-size: 11px; font-weight: 700; }
 .login-panel { min-height: 100vh; padding: clamp(28px, 5vw, 84px); display: flex; flex-direction: column; background: white; }
-.student-login-brand { display: flex; flex: 0 0 auto; justify-content: flex-end; margin-bottom: 16px; }
+.login-panel-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
+.student-login-brand { display: flex; flex: 0 0 auto; justify-content: flex-end; }
 .student-login-brand .brand { width: 100%; max-width: 180px; height: auto; min-height: 0; overflow: visible; }
 .student-login-brand .brand img { width: 100%; max-width: 180px; height: auto; object-fit: contain; }
-.mobile-view-switch { display: none; }
 .login-content { width: min(100%, 450px); margin: auto; }
 .india-clock { margin: 0 0 20px; display: flex; align-items: center; justify-content: center; gap: 8px; color: #68766f; font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .india-clock svg { width: 16px; height: 16px; }
@@ -292,7 +289,6 @@ button:focus-visible, input:focus-visible { outline: 3px solid rgba(76, 116, 94,
 .weekday-options .button { min-height: 37px; padding: 0 11px; font-size: 10px; }
 
 @media (max-width: 1100px) {
-  .student-shell { grid-template-columns: 45% 55%; }
   .promotion-row { grid-template-columns: 28px 90px 1fr; }
   .promotion-row > img { width: 90px; }
   .row-actions { grid-column: 3; }
@@ -300,11 +296,8 @@ button:focus-visible, input:focus-visible { outline: 3px solid rgba(76, 116, 94,
 }
 
 @media (max-width: 760px) {
-  .student-shell { display: flex; flex-direction: column; }
-  .promo-panel { min-height: 310px; padding: 24px; }
-  .login-panel { min-height: auto; padding: 34px 24px 24px; }
+  .login-panel { min-height: 100vh; padding: 26px 24px 24px; }
   .student-login-brand .brand { width: 100%; max-width: 180px; }
-  .mobile-view-switch { position: absolute; display: block; top: 26px; right: 24px; z-index: 5; }
   .login-content { width: 100%; margin: 0 auto; }
   .login-heading { margin-bottom: 28px; }
   .login-heading h2 { font-size: 35px; }
@@ -359,6 +352,9 @@ button:focus-visible, input:focus-visible { outline: 3px solid rgba(76, 116, 94,
 }
 
 @media (max-width: 420px) {
+  .login-panel-header { flex-wrap: wrap; }
+  .student-login-brand { flex-basis: 100%; }
+  .student-login-brand .brand { max-width: 160px; }
   .brand { width: 132px; height: 76px; }
   .view-switch button { padding: 7px 10px; }
   .row-actions .button svg { display: none; }

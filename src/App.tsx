@@ -339,27 +339,6 @@ function ViewSwitch({
   )
 }
 
-function PromotionPanel({
-  promotions,
-  activeIndex,
-}: {
-  promotions: Promotion[]
-  activeIndex: number
-}) {
-  const activePromotions = promotions.filter((promotion) => promotion.enabled)
-  const current =
-    activePromotions[activeIndex % Math.max(activePromotions.length, 1)]
-
-  return (
-    <section
-      className="promo-panel"
-      style={current ? { backgroundImage: `url("${current.source}")` } : undefined}
-    >
-      <div className="promo-overlay" />
-    </section>
-  )
-}
-
 function StatusCard({
   state,
   onDone,
@@ -496,7 +475,13 @@ function StatusCard({
   )
 }
 
-function StudentLogin() {
+function StudentLogin({
+  view,
+  setView,
+}: {
+  view: AppView
+  setView: (view: AppView) => void
+}) {
   const [registerNumber, setRegisterNumber] = useState("")
   const [state, setState] = useState<AttendanceState>("default")
   const [markedAt, setMarkedAt] = useState<string>()
@@ -646,8 +631,11 @@ function StudentLogin() {
 
   return (
     <main className="login-panel">
-      <div className="student-login-brand">
-        <Brand />
+      <div className="login-panel-header">
+        <ViewSwitch view={view} setView={setView} />
+        <div className="student-login-brand">
+          <Brand />
+        </div>
       </div>
       <div className="login-content">
         <p className="india-clock">
@@ -2923,10 +2911,10 @@ function AdminDashboard({
             <div className="dashboard-tip">
               <Icon name="shield" />
               <p>
-                <strong>Changes appear automatically</strong>
+                <strong>Promotional images are not shown on Student login</strong>
                 <span>
-                  Enabled promotions rotate on the student login page. The first
-                  image is shown by default.
+                  Images remain available here for management but are not
+                  displayed on the Student Attendance page.
                 </span>
               </p>
             </div>
@@ -2940,31 +2928,6 @@ function AdminDashboard({
 export default function App() {
   const [view, setView] = useState<AppView>("student")
   const [promotions, setPromotions] = useState<Promotion[]>([])
-  const [activeIndex, setActiveIndex] = useState(0)
-
-  useEffect(() => {
-    const enabledCount = promotions.filter(
-      (promotion) => promotion.enabled,
-    ).length
-    if (activeIndex >= enabledCount) setActiveIndex(0)
-    const interval = window.setInterval(() => {
-      setActiveIndex((index) =>
-        enabledCount > 0 ? (index + 1) % enabledCount : 0,
-      )
-    }, 6000)
-    return () => window.clearInterval(interval)
-  }, [promotions, activeIndex])
-
-  useEffect(() => {
-    promotionApi
-      .publicList()
-      .then(({ promotions: items }) => {
-        setPromotions(items)
-      })
-      .catch((error) =>
-        console.error("Unable to load login page images.", error),
-      )
-  }, [])
 
   const loginAdmin = async (username: string, password: string) => {
     await adminApi.login(username, password)
@@ -2992,16 +2955,5 @@ export default function App() {
     )
   }
 
-  return (
-    <div className="student-shell">
-      <PromotionPanel
-        promotions={promotions}
-        activeIndex={activeIndex}
-      />
-      <div className="mobile-view-switch">
-        <ViewSwitch view={view} setView={setView} />
-      </div>
-      <StudentLogin />
-    </div>
-  )
+  return <StudentLogin view={view} setView={setView} />
 }
