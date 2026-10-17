@@ -75,6 +75,7 @@ button:focus-visible, input:focus-visible { outline: 3px solid rgba(76, 116, 94,
 .status-note { margin-bottom: 18px; padding: 16px; border: 1px solid var(--line); border-radius: 13px; background: var(--soft); color: #4a504c; font-size: 13px; font-weight: 600; }
 .approval-note { margin: 0 auto 22px; color: #777d79; font-size: 12px; line-height: 1.6; max-width: 360px; }
 .status-card .button { width: 100%; }
+.status-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 
 .admin-login-shell { min-height: 100vh; display: grid; grid-template-columns: 55% 45%; background: white; }
 .admin-login-card { width: min(100%, 520px); margin: auto; padding: 50px; }

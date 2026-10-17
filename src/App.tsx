@@ -383,6 +383,7 @@ function PromotionPanel({
 
 function StatusCard({
   state,
+  onBack,
   onDone,
   onCheckOut,
   onRefreshApproval,
@@ -396,6 +397,7 @@ function StatusCard({
   message,
 }: {
   state: Exclude<AttendanceState, "default" | "loading">
+  onBack: () => void
   onDone: () => void
   onCheckOut: () => void
   onRefreshApproval: () => void
@@ -556,10 +558,15 @@ function StatusCard({
         state === "checked-out" ||
         state === "leave" ? (
         <p className="form-note">Returning to the attendance login...</p>
+      ) : state === "invalid" ? (
+        <div className="status-actions">
+          <Button variant="secondary" onClick={onBack}>
+            Back
+          </Button>
+          <Button onClick={onDone}>Try again</Button>
+        </div>
       ) : (
-        <Button onClick={onDone}>
-          Try again
-        </Button>
+        <Button onClick={onDone}>Try again</Button>
       )}
     </div>
   )
@@ -869,6 +876,11 @@ function StudentLogin({
     setServiceMessage("")
   }
 
+  const returnToRegisterForm = () => {
+    setState("default")
+    setServiceMessage("")
+  }
+
   return (
     <main className="login-panel">
       <div className="login-panel-header">
@@ -929,6 +941,7 @@ function StudentLogin({
         ) : (
           <StatusCard
             state={state}
+            onBack={returnToRegisterForm}
             onDone={reset}
             onCheckOut={() => void checkOut()}
             onRefreshApproval={() => void refreshApproval()}
