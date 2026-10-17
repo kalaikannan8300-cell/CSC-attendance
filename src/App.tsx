@@ -17,6 +17,7 @@ import {
   CalendarEvent,
   calendarApi,
   ExitRequest,
+  SecondCheckInRequest,
   promotionApi,
   reportApi,
   Student,
@@ -40,9 +41,28 @@ import {
   openLeaveDialog,
 } from "./leave-calendar"
 
-type AttendanceState = "default" | "loading" | "invalid" | "success" | "active" | "completed" | "checked-out" | "leave" | "inactive" | "error"
+type AttendanceState =
+  | "default"
+  | "loading"
+  | "invalid"
+  | "success"
+  | "active"
+  | "completed"
+  | "checked-out"
+  | "leave"
+  | "inactive"
+  | "error"
+  | "second-check-in-pending"
+  | "second-check-in-approved"
+  | "second-check-in-rejected"
 type AppView = "student" | "admin-login" | "admin-dashboard"
-type AdminSection = "attendance" | "exit-requests" | "promotions" | "students" | "calendar"
+type AdminSection =
+  | "attendance"
+  | "exit-requests"
+  | "second-check-in-requests"
+  | "promotions"
+  | "students"
+  | "calendar"
 
 type Promotion = {
   id: number
@@ -365,17 +385,27 @@ function StatusCard({
   state,
   onDone,
   onCheckOut,
+  onRefreshApproval,
+  onCompleteSecondCheckIn,
   isCheckingOut,
+  isRefreshingApproval,
+  isCompletingSecondCheckIn,
   markedAt,
   exitTime,
+  requestedAt,
   message,
 }: {
   state: Exclude<AttendanceState, "default" | "loading">
   onDone: () => void
   onCheckOut: () => void
+  onRefreshApproval: () => void
+  onCompleteSecondCheckIn: () => void
   isCheckingOut: boolean
+  isRefreshingApproval: boolean
+  isCompletingSecondCheckIn: boolean
   markedAt?: string
   exitTime?: string
+  requestedAt?: string
   message?: string
 }) {
   const content = {
@@ -435,6 +465,30 @@ function StatusCard({
       description: "The attendance service could not complete your request.",
       note: message || "Please try again in a moment.",
     },
+    "second-check-in-pending": {
+      label: "Approval Required",
+      title: "Second Check-In Pending Admin Approval",
+      description:
+        "Your original attendance time is unchanged. An administrator must approve this second check-in.",
+      note: requestedAt
+        ? `Request sent: ${formatIndiaDate(requestedAt)} ${formatIndiaTime(requestedAt)}`
+        : "Your request is waiting for an administrator.",
+    },
+    "second-check-in-approved": {
+      label: "Request Approved",
+      title: "Second Check-In Approved",
+      description: "Complete your approved second check-in to continue.",
+      note: requestedAt
+        ? `Approved request from ${formatIndiaDate(requestedAt)} ${formatIndiaTime(requestedAt)}`
+        : "Your administrator approved the request.",
+    },
+    "second-check-in-rejected": {
+      label: "Request Rejected",
+      title: "Second Check-In Not Approved",
+      description:
+        "Your original attendance record and check-in time have not been changed.",
+      note: "Contact your administrator if you think this was a mistake.",
+    },
   }[state]
 
   return (
@@ -457,7 +511,8 @@ function StatusCard({
               : state === "active" ||
                   state === "completed" ||
                   state === "checked-out" ||
-                  state === "leave"
+                  state === "leave" ||
+                  state === "second-check-in-pending"
                 ? "clock"
                 : "shield"
           }
@@ -482,6 +537,19 @@ function StatusCard({
           ) : (
             "Check Out"
           )}
+        </Button>
+      ) : state === "second-check-in-pending" ? (
+        <Button onClick={onRefreshApproval} disabled={isRefreshingApproval}>
+          {isRefreshingApproval ? "Checking approval..." : "Check approval status"}
+        </Button>
+      ) : state === "second-check-in-approved" ? (
+        <Button
+          onClick={onCompleteSecondCheckIn}
+          disabled={isCompletingSecondCheckIn}
+        >
+          {isCompletingSecondCheckIn
+            ? "Recording second check-in..."
+            : "Complete second check-in"}
         </Button>
       ) : state === "success" ||
         state === "completed" ||
@@ -508,7 +576,11 @@ function StudentLogin({
   const [state, setState] = useState<AttendanceState>("default")
   const [markedAt, setMarkedAt] = useState<string>()
   const [exitTime, setExitTime] = useState<string>()
+  const [requestedAt, setRequestedAt] = useState<string>()
   const [isCheckingOut, setIsCheckingOut] = useState(false)
+  const [isRefreshingApproval, setIsRefreshingApproval] = useState(false)
+  const [isCompletingSecondCheckIn, setIsCompletingSecondCheckIn] =
+    useState(false)
   const [isRestoring, setIsRestoring] = useState(true)
   const [serviceMessage, setServiceMessage] = useState("")
   const [currentTime, setCurrentTime] = useState(() => new Date())
@@ -522,9 +594,26 @@ function StudentLogin({
     let cancelled = false
     void attendanceApi
       .studentSession()
-      .then(() => {
+      .then((session) => {
         if (cancelled) return
-        setState("default")
+        setMarkedAt(session.attendance.entryTime)
+        setExitTime(session.attendance.exitTime ?? undefined)
+        setRequestedAt(
+          session.secondCheckInRequest?.requestedAt ?? undefined,
+        )
+        if (session.secondCheckInRequest?.status === "pending") {
+          setState("second-check-in-pending")
+        } else if (session.secondCheckInRequest?.status === "approved") {
+          setState("second-check-in-approved")
+        } else if (session.secondCheckInRequest?.status === "rejected") {
+          setState("second-check-in-rejected")
+        } else if (session.secondCheckInRequest?.status === "completed") {
+          setState(
+            session.attendance.status === "completed" ? "completed" : "active",
+          )
+        } else {
+          setState("default")
+        }
       })
       .catch((error: unknown) => {
         if (cancelled) return
@@ -566,10 +655,54 @@ function StudentLogin({
       setRegisterNumber("")
       setMarkedAt(undefined)
       setExitTime(undefined)
+      setRequestedAt(undefined)
       setServiceMessage("")
     }, 5000)
 
     return () => window.clearTimeout(timeout)
+  }, [state])
+
+  useEffect(() => {
+    if (state !== "second-check-in-pending") return
+
+    let cancelled = false
+    const interval = window.setInterval(() => {
+      void attendanceApi
+        .studentSession()
+        .then((session) => {
+          if (cancelled) return
+          const request = session.secondCheckInRequest
+          if (!request) return
+          setRequestedAt(request.requestedAt)
+          setServiceMessage("")
+          if (request.status === "approved")
+            setState("second-check-in-approved")
+          else if (request.status === "rejected")
+            setState("second-check-in-rejected")
+          else if (request.status === "completed") {
+            setMarkedAt(session.attendance.entryTime)
+            setExitTime(session.attendance.exitTime ?? undefined)
+            setState(
+              session.attendance.status === "completed"
+                ? "completed"
+                : "active",
+            )
+          }
+        })
+        .catch((error: unknown) => {
+          if (cancelled) return
+          setServiceMessage(
+            error instanceof Error
+              ? error.message
+              : "Unable to check the approval status.",
+          )
+        })
+    }, 5000)
+
+    return () => {
+      cancelled = true
+      window.clearInterval(interval)
+    }
   }, [state])
 
   const submit = async (event: FormEvent) => {
@@ -581,16 +714,30 @@ function StudentLogin({
       const result = await attendanceApi.mark(registerNumber)
       setMarkedAt(result.attendance.markedAt)
       setExitTime(result.attendance.exitTime ?? undefined)
-      setState(
-        result.attendance.status === "entry_recorded"
-          ? "success"
-          : result.attendance.status === "already_checked_in"
-            ? "active"
-            : "completed",
-      )
+      if (result.attendance.status === "second_check_in_pending") {
+        setRequestedAt(result.secondCheckInRequest?.requestedAt)
+        setState("second-check-in-pending")
+      } else if (result.attendance.status === "second_check_in_approved") {
+        setRequestedAt(result.secondCheckInRequest?.requestedAt)
+        setState("second-check-in-approved")
+      } else {
+        setState(
+          result.attendance.status === "entry_recorded" ||
+            result.attendance.status === "second_entry_recorded"
+            ? "success"
+            : result.attendance.status === "already_checked_in"
+              ? "active"
+              : "completed",
+        )
+      }
     } catch (error) {
       if (error instanceof ApiError && error.code === "STUDENT_NOT_FOUND")
         setState("invalid")
+      else if (
+        error instanceof ApiError &&
+        error.code === "SECOND_CHECK_IN_REJECTED"
+      )
+        setState("second-check-in-rejected")
       else if (error instanceof ApiError && error.code === "STUDENT_INACTIVE")
         setState("inactive")
       else if (error instanceof ApiError && error.code === "CLASS_CLOSED_LEAVE")
@@ -643,11 +790,82 @@ function StudentLogin({
     }
   }
 
+  const refreshApproval = async () => {
+    setIsRefreshingApproval(true)
+    setServiceMessage("")
+    try {
+      const session = await attendanceApi.studentSession()
+      const request = session.secondCheckInRequest
+      if (!request) {
+        setState("default")
+        return
+      }
+      setRequestedAt(request.requestedAt)
+      setState(
+        request.status === "pending"
+          ? "second-check-in-pending"
+          : request.status === "approved"
+            ? "second-check-in-approved"
+            : request.status === "rejected"
+              ? "second-check-in-rejected"
+              : session.attendance.status === "completed"
+                ? "completed"
+                : "active",
+      )
+    } catch (error) {
+      setServiceMessage(
+        error instanceof Error
+          ? error.message
+          : "Unable to check the approval status.",
+      )
+    } finally {
+      setIsRefreshingApproval(false)
+    }
+  }
+
+  const completeSecondCheckIn = async () => {
+    setIsCompletingSecondCheckIn(true)
+    setServiceMessage("")
+    try {
+      const result = await attendanceApi.completeSecondCheckIn()
+      setMarkedAt(result.attendance.markedAt)
+      setExitTime(result.attendance.exitTime ?? undefined)
+      setState(
+        result.attendance.status === "second_entry_recorded"
+          ? "success"
+          : result.attendance.status === "already_checked_in"
+            ? "active"
+            : "completed",
+      )
+    } catch (error) {
+      if (
+        error instanceof ApiError &&
+        error.code === "SECOND_CHECK_IN_PENDING"
+      ) {
+        setState("second-check-in-pending")
+      } else if (
+        error instanceof ApiError &&
+        error.code === "SECOND_CHECK_IN_NOT_APPROVED"
+      ) {
+        setState("second-check-in-rejected")
+      } else {
+        setServiceMessage(
+          error instanceof Error
+            ? error.message
+            : "Unable to complete the second check-in.",
+        )
+      }
+    } finally {
+      setIsCompletingSecondCheckIn(false)
+    }
+  }
+
   const reset = () => {
     setState("default")
     setRegisterNumber("")
     setMarkedAt(undefined)
     setExitTime(undefined)
+    setRequestedAt(undefined)
     setServiceMessage("")
   }
 
@@ -713,9 +931,14 @@ function StudentLogin({
             state={state}
             onDone={reset}
             onCheckOut={() => void checkOut()}
+            onRefreshApproval={() => void refreshApproval()}
+            onCompleteSecondCheckIn={() => void completeSecondCheckIn()}
             isCheckingOut={isCheckingOut}
+            isRefreshingApproval={isRefreshingApproval}
+            isCompletingSecondCheckIn={isCompletingSecondCheckIn}
             markedAt={markedAt}
             exitTime={exitTime}
+            requestedAt={requestedAt}
             message={serviceMessage}
           />
         )}
@@ -2222,6 +2445,184 @@ function ExitRequestsManagement({ onApproved }: { onApproved: () => void }) {
   )
 }
 
+function SecondCheckInRequestsManagement() {
+  const [requests, setRequests] = useState<SecondCheckInRequest[]>([])
+  const [statusFilter, setStatusFilter] = useState<
+    "all" | SecondCheckInRequest["status"]
+  >("pending")
+  const [isLoading, setIsLoading] = useState(true)
+  const [processingId, setProcessingId] = useState<number | null>(null)
+  const [error, setError] = useState("")
+
+  const refreshRequests = useCallback(async () => {
+    setIsLoading(true)
+    try {
+      const result = await attendanceApi.secondCheckInRequests()
+      setRequests(result.requests)
+      setError("")
+    } catch (loadError) {
+      setError(
+        loadError instanceof Error
+          ? loadError.message
+          : "Unable to load second login requests.",
+      )
+    } finally {
+      setIsLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    void refreshRequests()
+  }, [refreshRequests])
+
+  const processRequest = async (
+    request: SecondCheckInRequest,
+    action: "approve" | "reject",
+  ) => {
+    setProcessingId(request.id)
+    setError("")
+    try {
+      await attendanceApi.processSecondCheckInRequest(request.id, action)
+      await refreshRequests()
+    } catch (requestError) {
+      setError(
+        requestError instanceof Error
+          ? requestError.message
+          : "Unable to process this second login request.",
+      )
+    } finally {
+      setProcessingId(null)
+    }
+  }
+
+  const visibleRequests = requests.filter(
+    (request) => statusFilter === "all" || request.status === statusFilter,
+  )
+
+  return (
+    <section className="attendance-management">
+      <div className="management-toolbar">
+        <div>
+          <h2>Second Login Requests</h2>
+          <p>
+            Approve or reject a student's second login for the local attendance
+            day. The first check-in time is preserved.
+          </p>
+        </div>
+        <Button
+          variant="secondary"
+          onClick={() => void refreshRequests()}
+          disabled={isLoading}
+        >
+          {isLoading ? "Refreshing..." : "Refresh"}
+        </Button>
+      </div>
+      {error && (
+        <p className="management-error" role="alert">
+          {error}
+        </p>
+      )}
+      <div className="student-list-panel">
+        <div className="student-list-toolbar">
+          <label className="student-filter">
+            <span>Status</span>
+            <select
+              value={statusFilter}
+              onChange={(event) =>
+                setStatusFilter(event.target.value as typeof statusFilter)
+              }
+            >
+              <option value="pending">Pending</option>
+              <option value="approved">Approved</option>
+              <option value="rejected">Rejected</option>
+              <option value="completed">Completed</option>
+              <option value="all">All requests</option>
+            </select>
+          </label>
+        </div>
+        <div className="student-table-wrap">
+          <table className="student-table exit-request-table">
+            <thead>
+              <tr>
+                <th>Student</th>
+                <th>Register Number</th>
+                <th>Requested (IST)</th>
+                <th>Status</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {isLoading ? (
+                <tr>
+                  <td colSpan={5} className="student-empty">
+                    Loading second login requests...
+                  </td>
+                </tr>
+              ) : visibleRequests.length === 0 ? (
+                <tr>
+                  <td colSpan={5} className="student-empty">
+                    No second login requests match this filter.
+                  </td>
+                </tr>
+              ) : (
+                visibleRequests.map((request) => (
+                  <tr key={request.id}>
+                    <td data-label="Student">{request.name}</td>
+                    <td data-label="Register Number">
+                      <strong>{request.register_number}</strong>
+                    </td>
+                    <td data-label="Requested (IST)">
+                      {formatIndiaDate(request.requested_at)}{" "}
+                      {formatIndiaTime(request.requested_at)}
+                    </td>
+                    <td data-label="Status">
+                      <span
+                        className={`attendance-status request-${request.status}`}
+                      >
+                        {request.status}
+                      </span>
+                    </td>
+                    <td data-label="Actions">
+                      {request.status === "pending" ? (
+                        <div className="student-actions">
+                          <button
+                            className="student-action"
+                            disabled={processingId === request.id}
+                            onClick={() =>
+                              void processRequest(request, "approve")
+                            }
+                          >
+                            {processingId === request.id
+                              ? "Saving..."
+                              : "Approve"}
+                          </button>
+                          <button
+                            className="student-action deactivate-action"
+                            disabled={processingId === request.id}
+                            onClick={() =>
+                              void processRequest(request, "reject")
+                            }
+                          >
+                            Reject
+                          </button>
+                        </div>
+                      ) : request.processed_at ? (
+                        `${request.status === "completed" ? "Approved" : request.status === "approved" ? "Approved" : "Rejected"} ${formatIndiaDate(request.processed_at)} ${formatIndiaTime(request.processed_at)}`
+                      ) : (
+                        "—"
+                      )}
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  )
+}
+
 function leaveDuration(start: string, end: string) {
   if (!start || !end || end <= start) return ""
   const toMinutes = (time: string) => {
@@ -2690,6 +3091,20 @@ function AdminDashboard({
             Exit Requests
           </button>
           <button
+            className={
+              activeSection === "second-check-in-requests" ? "active" : ""
+            }
+            onClick={() => {
+              setActiveSection("second-check-in-requests")
+              setMobileNavOpen(false)
+            }}
+          >
+            <span>
+              <Icon name="shield" />
+            </span>
+            Second Login Requests
+          </button>
+          <button
             className={activeSection === "students" ? "active" : ""}
             onClick={() => {
               setActiveSection("students")
@@ -2757,6 +3172,8 @@ function AdminDashboard({
                 ? "Attendance"
                 : activeSection === "exit-requests"
                   ? "Exit Requests"
+                  : activeSection === "second-check-in-requests"
+                    ? "Second Login Requests"
                   : activeSection === "students"
                     ? "Student Management"
                       : activeSection === "calendar"
@@ -2798,6 +3215,8 @@ function AdminDashboard({
           <ExitRequestsManagement
             onApproved={() => setActiveSection("attendance")}
           />
+        ) : activeSection === "second-check-in-requests" ? (
+          <SecondCheckInRequestsManagement />
         ) : activeSection === "students" ? (
           <StudentManagement />
         ) : activeSection === "calendar" ? (

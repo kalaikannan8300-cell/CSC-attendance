@@ -93,6 +93,41 @@ CREATE INDEX IF NOT EXISTS idx_attendance_student_date ON attendance(student_id,
 CREATE INDEX IF NOT EXISTS idx_login_requests_pending ON login_requests(status, requested_at DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_one_pending_request_per_attendance ON login_requests(attendance_id) WHERE status = 'pending';
 
+CREATE TABLE IF NOT EXISTS second_checkin_requests (
+  id BIGSERIAL PRIMARY KEY,
+  student_id BIGINT NOT NULL REFERENCES students(id) ON DELETE RESTRICT,
+  attendance_date DATE NOT NULL,
+  original_attendance_id BIGINT NOT NULL REFERENCES attendance(id) ON DELETE RESTRICT,
+  requested_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  status TEXT NOT NULL DEFAULT 'pending'
+    CHECK (status IN ('pending', 'approved', 'rejected', 'completed')),
+  processed_by BIGINT REFERENCES admins(id) ON DELETE SET NULL,
+  processed_at TIMESTAMPTZ,
+  CHECK ((status = 'pending' AND processed_at IS NULL) OR
+         (status <> 'pending' AND processed_at IS NOT NULL))
+);
+CREATE INDEX IF NOT EXISTS idx_second_checkin_requests_status
+  ON second_checkin_requests(status, requested_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_one_pending_second_checkin_per_day
+  ON second_checkin_requests(student_id, attendance_date)
+  WHERE status = 'pending';
+
+CREATE TABLE IF NOT EXISTS attendance_second_checkins (
+  id BIGSERIAL PRIMARY KEY,
+  student_id BIGINT NOT NULL REFERENCES students(id) ON DELETE RESTRICT,
+  attendance_date DATE NOT NULL,
+  original_attendance_id BIGINT NOT NULL REFERENCES attendance(id) ON DELETE RESTRICT,
+  request_id BIGINT NOT NULL UNIQUE
+    REFERENCES second_checkin_requests(id) ON DELETE RESTRICT,
+  entry_time TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  exit_time TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (student_id, attendance_date),
+  CHECK (exit_time IS NULL OR exit_time >= entry_time)
+);
+CREATE INDEX IF NOT EXISTS idx_attendance_second_checkins_student_date
+  ON attendance_second_checkins(student_id, attendance_date DESC);
+
 CREATE TABLE IF NOT EXISTS admin_sessions (
   token_hash TEXT PRIMARY KEY,
   admin_id BIGINT NOT NULL REFERENCES admins(id) ON DELETE CASCADE,
@@ -105,11 +140,17 @@ CREATE TABLE IF NOT EXISTS student_sessions (
   token_hash TEXT PRIMARY KEY,
   student_id BIGINT NOT NULL REFERENCES students(id) ON DELETE CASCADE,
   attendance_id BIGINT NOT NULL REFERENCES attendance(id) ON DELETE RESTRICT,
+  second_checkin_id BIGINT REFERENCES attendance_second_checkins(id) ON DELETE RESTRICT,
   expires_at TIMESTAMPTZ NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+ALTER TABLE student_sessions
+  ADD COLUMN IF NOT EXISTS second_checkin_id BIGINT
+  REFERENCES attendance_second_checkins(id) ON DELETE RESTRICT;
 CREATE INDEX IF NOT EXISTS idx_student_sessions_expiry ON student_sessions(expires_at);
 CREATE INDEX IF NOT EXISTS idx_student_sessions_attendance ON student_sessions(attendance_id);
+CREATE INDEX IF NOT EXISTS idx_student_sessions_second_checkin
+  ON student_sessions(second_checkin_id);
 
 CREATE TABLE IF NOT EXISTS calendar_events (
   id BIGSERIAL PRIMARY KEY,

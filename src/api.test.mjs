@@ -175,6 +175,80 @@ test("student check-in sends the expected same-origin request and parses JSON", 
   assert.equal(result.attendance.status, "entry_recorded")
 })
 
+test("student second check-in keeps approval pending and uses the authenticated completion route", async () => {
+  const calls = []
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url, options })
+    return new Response(
+      JSON.stringify({
+        attendance: {
+          id: 12,
+          markedAt: "2026-10-16T08:00:00.000Z",
+          exitTime: null,
+          status:
+            url === "/api/attendance"
+              ? "second_check_in_pending"
+              : "second_entry_recorded",
+        },
+        ...(url === "/api/attendance"
+          ? {
+              secondCheckInRequest: {
+                id: 8,
+                requestedAt: "2026-10-16T08:01:00.000Z",
+                status: "pending",
+              },
+            }
+          : {}),
+      }),
+      {
+        status: url === "/api/attendance" ? 202 : 201,
+        headers: { "Content-Type": "application/json" },
+      },
+    )
+  }
+
+  const pending = await attendanceApi.mark("CSC1001")
+  const completed = await attendanceApi.completeSecondCheckIn()
+
+  assert.equal(pending.attendance.status, "second_check_in_pending")
+  assert.equal(pending.secondCheckInRequest.status, "pending")
+  assert.equal(calls[0].url, "/api/attendance")
+  assert.equal(calls[1].url, "/api/attendance/second-check-in/complete")
+  assert.equal(calls[1].options.method, "POST")
+  assert.equal(calls[1].options.credentials, "same-origin")
+  assert.equal(completed.attendance.status, "second_entry_recorded")
+})
+
+test("Admin second check-in request list and decisions use protected same-origin routes", async () => {
+  const calls = []
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url, options })
+    return new Response(
+      JSON.stringify(
+        url === "/api/admin/second-check-in-requests"
+          ? { requests: [] }
+          : { success: true, status: "approved" },
+      ),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    )
+  }
+
+  await attendanceApi.secondCheckInRequests()
+  const result = await attendanceApi.processSecondCheckInRequest(8, "approve")
+
+  assert.equal(calls[0].url, "/api/admin/second-check-in-requests")
+  assert.equal(
+    calls[1].url,
+    "/api/admin/second-check-in-requests/8/approve",
+  )
+  assert.equal(calls[1].options.method, "POST")
+  assert.equal(
+    calls[1].options.headers.get("X-Requested-With"),
+    "CSCAttendance",
+  )
+  assert.equal(result.status, "approved")
+})
+
 test("attendance API reports an empty success response instead of throwing a JSON parse error", async () => {
   globalThis.fetch = async () => new Response("", { status: 200 })
 

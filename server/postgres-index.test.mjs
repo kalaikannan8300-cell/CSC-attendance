@@ -398,7 +398,7 @@ describe(
       assert.equal(inactive.response.status, 403)
     })
 
-    test("repeated check-ins reuse today's row without duplicating or auto-approving a legacy exit request", async () => {
+    test("repeated check-ins request approval without duplicating attendance or altering legacy exit requests", async () => {
       registerNumber = "PGTEST1002"
 
       const student = await pool.query(
@@ -425,25 +425,311 @@ describe(
 
       assert.deepEqual(
         results.map((result) => result.response.status),
-        [200, 200],
+        [202, 202],
       )
 
       assert.equal(
-        results[0].payload.attendance.id,
-        results[1].payload.attendance.id,
+        results[0].payload.secondCheckInRequest.id,
+        results[1].payload.secondCheckInRequest.id,
       )
-      assert.equal(results[0].payload.attendance.status, "already_checked_in")
+      assert.equal(results[0].payload.attendance.status, "second_check_in_pending")
 
       const counts = await pool.query(
-        "SELECT (SELECT COUNT(*) FROM attendance)::int AS attendance,(SELECT COUNT(*) FROM login_requests WHERE status='pending')::int AS pending",
+        `SELECT (SELECT COUNT(*) FROM attendance WHERE student_id=$1)::int AS attendance,
+                (SELECT COUNT(*) FROM login_requests WHERE student_id=$1 AND status='pending')::int AS exit_pending,
+                (SELECT COUNT(*) FROM second_checkin_requests WHERE student_id=$1 AND status='pending')::int AS second_pending`,
+        [student.rows[0].id],
       )
 
-      assert.deepEqual(counts.rows[0], { attendance: 1, pending: 1 })
+      assert.deepEqual(counts.rows[0], {
+        attendance: 1,
+        exit_pending: 1,
+        second_pending: 1,
+      })
       const pendingRequest = await pool.query(
         "SELECT status FROM login_requests WHERE id=$1",
         [pendingRequestId],
       )
       assert.equal(pendingRequest.rows[0].status, "pending")
+    })
+
+    test("checkout then second-login request, rejection, approval, duplicate prevention, and next-day attendance", async () => {
+      registerNumber = "PGSECOND1001"
+      const student = await pool.query(
+        "INSERT INTO students(register_number,name) VALUES($1,$2) RETURNING id",
+        [registerNumber, "Second Check-In Student"],
+      )
+      const studentId = student.rows[0].id
+
+      const first = await api("/api/attendance", {
+        method: "POST",
+        body: { registerNumber },
+      })
+      assert.equal(first.response.status, 201)
+      const originalEntryTime = first.payload.attendance.markedAt
+      const originalAttendanceId = first.payload.attendance.id
+      const originalCheckOut = await api("/api/attendance/check-out", {
+        method: "POST",
+        studentAuthenticated: true,
+      })
+      assert.equal(originalCheckOut.response.status, 200)
+      const originalExitTime = originalCheckOut.payload.attendance.exitTime
+
+      studentCookie = undefined
+      const unauthenticatedCompletion = await api(
+        "/api/attendance/second-check-in/complete",
+        { method: "POST", studentAuthenticated: true },
+      )
+      assert.equal(unauthenticatedCompletion.response.status, 401)
+      const secondAttempt = await api("/api/attendance", {
+        method: "POST",
+        body: { registerNumber },
+      })
+      assert.equal(secondAttempt.response.status, 202)
+      assert.equal(
+        secondAttempt.payload.attendance.status,
+        "second_check_in_pending",
+      )
+      const rejectedRequestId =
+        secondAttempt.payload.secondCheckInRequest.id
+
+      const pendingAttempts = await Promise.all([
+        api("/api/attendance", {
+          method: "POST",
+          body: { registerNumber },
+        }),
+        api("/api/attendance", {
+          method: "POST",
+          body: { registerNumber },
+        }),
+      ])
+      assert.deepEqual(
+        pendingAttempts.map(({ response }) => response.status),
+        [202, 202],
+      )
+      assert.deepEqual(
+        pendingAttempts.map(
+          ({ payload }) => payload.secondCheckInRequest.id,
+        ),
+        [rejectedRequestId, rejectedRequestId],
+      )
+      const prematureCompletion = await api(
+        "/api/attendance/second-check-in/complete",
+        { method: "POST", studentAuthenticated: true },
+      )
+      assert.equal(prematureCompletion.response.status, 409)
+      assert.equal(prematureCompletion.payload.code, "SECOND_CHECK_IN_PENDING")
+
+      const unauthenticatedList = await api(
+        "/api/admin/second-check-in-requests",
+      )
+      assert.equal(unauthenticatedList.response.status, 401)
+      const unauthenticatedApproval = await api(
+        `/api/admin/second-check-in-requests/${rejectedRequestId}/approve`,
+        { method: "POST" },
+      )
+      assert.equal(unauthenticatedApproval.response.status, 401)
+
+      const firstPendingList = await api(
+        "/api/admin/second-check-in-requests",
+        { authenticated: true },
+      )
+      const listedRequest = firstPendingList.payload.requests.find(
+        ({ id }) => id === rejectedRequestId,
+      )
+      assert.equal(listedRequest.name, "Second Check-In Student")
+      assert.equal(listedRequest.register_number, registerNumber)
+      assert.ok(listedRequest.requested_at)
+      assert.equal(listedRequest.status, "pending")
+
+      const reject = await api(
+        `/api/admin/second-check-in-requests/${rejectedRequestId}/reject`,
+        { method: "POST", authenticated: true },
+      )
+      assert.equal(reject.response.status, 200)
+      const unchanged = await pool.query(
+        `SELECT entry_time,exit_time,status FROM attendance
+         WHERE student_id=$1 AND id=$2`,
+        [studentId, originalAttendanceId],
+      )
+      assert.equal(
+        unchanged.rows[0].entry_time.toISOString(),
+        new Date(originalEntryTime).toISOString(),
+      )
+      assert.equal(
+        unchanged.rows[0].exit_time.toISOString(),
+        new Date(originalExitTime).toISOString(),
+      )
+      assert.equal(unchanged.rows[0].status, "completed")
+      const rejectedSession = await api("/api/attendance/session", {
+        studentAuthenticated: true,
+      })
+      assert.equal(
+        rejectedSession.payload.secondCheckInRequest.status,
+        "rejected",
+      )
+      assert.equal(
+        (
+          await pool.query(
+            "SELECT COUNT(*)::int AS count FROM attendance_second_checkins WHERE student_id=$1",
+            [studentId],
+          )
+        ).rows[0].count,
+        0,
+      )
+
+      const retryAfterReject = await api("/api/attendance", {
+        method: "POST",
+        body: { registerNumber },
+      })
+      assert.equal(retryAfterReject.response.status, 403)
+      assert.equal(retryAfterReject.payload.code, "SECOND_CHECK_IN_REJECTED")
+
+      registerNumber = "PGSECOND1002"
+      const approvedStudent = await pool.query(
+        "INSERT INTO students(register_number,name) VALUES($1,$2) RETURNING id",
+        [registerNumber, "Approved Second Check-In Student"],
+      )
+      const approvedStudentId = approvedStudent.rows[0].id
+      const approvedFirst = await api("/api/attendance", {
+        method: "POST",
+        body: { registerNumber },
+      })
+      assert.equal(approvedFirst.response.status, 201)
+      const approvedOriginalAttendanceId = approvedFirst.payload.attendance.id
+      const approvedOriginalEntryTime = approvedFirst.payload.attendance.markedAt
+      const approvedFirstCheckOut = await api("/api/attendance/check-out", {
+        method: "POST",
+        studentAuthenticated: true,
+      })
+      assert.equal(approvedFirstCheckOut.response.status, 200)
+      const approvedOriginalExitTime =
+        approvedFirstCheckOut.payload.attendance.exitTime
+      const approvedSecondAttempt = await api("/api/attendance", {
+        method: "POST",
+        body: { registerNumber },
+      })
+      assert.equal(approvedSecondAttempt.response.status, 202)
+      const approvedRequestId =
+        approvedSecondAttempt.payload.secondCheckInRequest.id
+
+      const approve = await api(
+        `/api/admin/second-check-in-requests/${approvedRequestId}/approve`,
+        { method: "POST", authenticated: true },
+      )
+      assert.equal(approve.response.status, 200)
+      const approvedAttempt = await api("/api/attendance", {
+        method: "POST",
+        body: { registerNumber },
+      })
+      assert.equal(approvedAttempt.response.status, 200)
+      assert.equal(
+        approvedAttempt.payload.attendance.status,
+        "second_check_in_approved",
+      )
+      const approvedSession = await api("/api/attendance/session", {
+        studentAuthenticated: true,
+      })
+      assert.equal(
+        approvedSession.payload.secondCheckInRequest.status,
+        "approved",
+      )
+
+      const second = await api(
+        "/api/attendance/second-check-in/complete",
+        { method: "POST", studentAuthenticated: true },
+      )
+      assert.equal(second.response.status, 201)
+      assert.equal(second.payload.attendance.status, "second_entry_recorded")
+      const secondRecord = await pool.query(
+        `SELECT entry_time,exit_time,request_id
+         FROM attendance_second_checkins
+         WHERE student_id=$1 AND attendance_date=$2`,
+        [approvedStudentId, businessDate()],
+      )
+      assert.equal(secondRecord.rowCount, 1)
+      assert.equal(
+        Number(secondRecord.rows[0].request_id),
+        approvedRequestId,
+      )
+      assert.equal(
+        (
+          await pool.query(
+            "SELECT entry_time FROM attendance WHERE id=$1",
+            [approvedOriginalAttendanceId],
+          )
+        ).rows[0].entry_time.toISOString(),
+        new Date(approvedOriginalEntryTime).toISOString(),
+      )
+      assert.equal(
+        (
+          await pool.query(
+            "SELECT status FROM second_checkin_requests WHERE id=$1",
+            [approvedRequestId],
+          )
+        ).rows[0].status,
+        "completed",
+      )
+
+      const secondSession = await api("/api/attendance/session", {
+        studentAuthenticated: true,
+      })
+      assert.equal(secondSession.payload.attendance.id, second.payload.attendance.id)
+      assert.equal(secondSession.payload.secondCheckInRequest.status, "completed")
+
+      const secondCheckOut = await api("/api/attendance/check-out", {
+        method: "POST",
+        studentAuthenticated: true,
+      })
+      assert.equal(secondCheckOut.response.status, 200)
+      assert.ok(secondCheckOut.payload.attendance.exitTime)
+      const afterSecondCheckOut = await pool.query(
+        `SELECT a.exit_time AS original_exit,s.exit_time AS second_exit
+         FROM attendance a
+         JOIN attendance_second_checkins s ON s.original_attendance_id=a.id
+         WHERE a.id=$1`,
+        [approvedOriginalAttendanceId],
+      )
+      assert.equal(
+        afterSecondCheckOut.rows[0].original_exit.toISOString(),
+        new Date(approvedOriginalExitTime).toISOString(),
+      )
+      assert.ok(afterSecondCheckOut.rows[0].second_exit)
+
+      const previousDate = businessDate(new Date(Date.now() - 24 * 60 * 60 * 1000))
+      await pool.query(
+        "UPDATE attendance SET attendance_date=$1::date WHERE id=$2",
+        [previousDate, approvedOriginalAttendanceId],
+      )
+      await pool.query(
+        `UPDATE attendance_second_checkins SET attendance_date=$1::date
+         WHERE student_id=$2`,
+        [previousDate, approvedStudentId],
+      )
+      await pool.query(
+        `UPDATE second_checkin_requests SET attendance_date=$1::date
+         WHERE student_id=$2`,
+        [previousDate, approvedStudentId],
+      )
+      const nextDayFirstCheckIn = await api("/api/attendance", {
+        method: "POST",
+        body: { registerNumber },
+      })
+      assert.equal(nextDayFirstCheckIn.response.status, 201)
+      assert.equal(
+        nextDayFirstCheckIn.payload.attendance.status,
+        "entry_recorded",
+      )
+      assert.equal(
+        (
+          await pool.query(
+            `SELECT COUNT(*)::int AS count FROM attendance
+             WHERE student_id=$1`,
+            [approvedStudentId],
+          )
+        ).rows[0].count,
+        2,
+      )
     })
 
     test("student checkout uses its bound session, stores database time once, and appears in Admin attendance", async () => {
@@ -827,6 +1113,10 @@ describe(
       assert.equal((await api("/api/admin/attendance")).response.status, 401)
       assert.equal((await api("/api/admin/promotions")).response.status, 401)
       assert.equal((await api("/api/admin/exit-requests")).response.status, 401)
+      assert.equal(
+        (await api("/api/admin/second-check-in-requests")).response.status,
+        401,
+      )
       assert.equal((await api("/api/admin/leaves?month=2026-10")).response.status, 401)
       assert.equal(
         (

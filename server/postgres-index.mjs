@@ -957,18 +957,34 @@ async function loadMonthlyAttendanceReport(pool, month) {
   })
 }
 
-async function createStudentSession(client, studentId, attendanceId) {
+function studentSessionCookie(sessionToken) {
+  const secure = process.env.NODE_ENV === "production" ? "; Secure" : ""
+  return `csc_student_session=${sessionToken}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${STUDENT_SESSION_HOURS * 60 * 60}${secure}`
+}
+
+async function createStudentSession(
+  client,
+  studentId,
+  attendanceId,
+  secondCheckinId = null,
+) {
   const sessionToken = randomBytes(32).toString("base64url")
 
   await client.query("DELETE FROM student_sessions WHERE expires_at<=NOW()")
   await client.query(
-    `INSERT INTO student_sessions(token_hash,student_id,attendance_id,expires_at)
-     VALUES($1,$2,$3,NOW()+($4 * INTERVAL '1 hour'))`,
-    [hash(sessionToken), studentId, attendanceId, STUDENT_SESSION_HOURS],
+    `INSERT INTO student_sessions(
+       token_hash,student_id,attendance_id,second_checkin_id,expires_at
+     ) VALUES($1,$2,$3,$4,NOW()+($5 * INTERVAL '1 hour'))`,
+    [
+      hash(sessionToken),
+      studentId,
+      attendanceId,
+      secondCheckinId,
+      STUDENT_SESSION_HOURS,
+    ],
   )
 
-  const secure = process.env.NODE_ENV === "production" ? "; Secure" : ""
-  return `csc_student_session=${sessionToken}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${STUDENT_SESSION_HOURS * 60 * 60}${secure}`
+  return studentSessionCookie(sessionToken)
 }
 
 export function createPostgresApiServer({
@@ -1159,13 +1175,31 @@ export function createPostgresApiServer({
         }
 
         const result = await pool.query(
-          `SELECT a.id,a.entry_time,a.exit_time,a.status
+          `SELECT COALESCE(sc.id,a.id) AS id,
+                  COALESCE(sc.entry_time,a.entry_time) AS entry_time,
+                  CASE WHEN ss.second_checkin_id IS NOT NULL
+                    THEN sc.exit_time ELSE a.exit_time END AS exit_time,
+                  CASE WHEN ss.second_checkin_id IS NOT NULL
+                    THEN CASE WHEN sc.exit_time IS NULL THEN 'present' ELSE 'completed' END
+                    ELSE a.status END AS status,
+                  second_request.status AS second_checkin_status,
+                  second_request.requested_at AS second_checkin_requested_at
            FROM student_sessions ss
            JOIN students s ON s.id=ss.student_id
            JOIN attendance a ON a.id=ss.attendance_id
+           LEFT JOIN attendance_second_checkins sc
+             ON sc.id=ss.second_checkin_id AND sc.student_id=ss.student_id
+           LEFT JOIN LATERAL (
+             SELECT status,requested_at
+             FROM second_checkin_requests
+             WHERE student_id=ss.student_id
+               AND attendance_date=$2::date
+             ORDER BY id DESC
+             LIMIT 1
+           ) second_request ON TRUE
            WHERE ss.token_hash=$1 AND ss.expires_at>NOW()
              AND a.student_id=ss.student_id`,
-          [studentSessionHash],
+          [studentSessionHash, businessDate()],
         )
 
         if (!result.rowCount) {
@@ -1182,6 +1216,12 @@ export function createPostgresApiServer({
             exitTime: result.rows[0].exit_time,
             status: result.rows[0].status,
           },
+          secondCheckInRequest: result.rows[0].second_checkin_status
+            ? {
+                status: result.rows[0].second_checkin_status,
+                requestedAt: result.rows[0].second_checkin_requested_at,
+              }
+            : null,
         })
       }
 
@@ -1817,11 +1857,22 @@ export function createPostgresApiServer({
             [student.id, date],
           )
 
-          if (existing.rows[0].exit_time) {
-            const studentSessionCookie = await createStudentSession(
+          const originalAttendance = existing.rows[0]
+          const secondEntry = await client.query(
+            `SELECT id,entry_time,exit_time
+             FROM attendance_second_checkins
+             WHERE student_id=$1 AND attendance_date=$2
+             FOR UPDATE`,
+            [student.id, date],
+          )
+
+          if (secondEntry.rowCount) {
+            const second = secondEntry.rows[0]
+            const sessionCookie = await createStudentSession(
               client,
               student.id,
-              existing.rows[0].id,
+              originalAttendance.id,
+              second.id,
             )
             await client.query("COMMIT")
 
@@ -1830,40 +1881,298 @@ export function createPostgresApiServer({
               200,
               {
                 attendance: {
-                  id: Number(existing.rows[0].id),
-                  markedAt: existing.rows[0].entry_time,
-                  exitTime: existing.rows[0].exit_time,
-                  status: "already_completed",
+                  id: Number(second.id),
+                  markedAt: second.entry_time,
+                  exitTime: second.exit_time,
+                  status: second.exit_time
+                    ? "already_completed"
+                    : "already_checked_in",
                 },
               },
-              { "Set-Cookie": studentSessionCookie },
+              { "Set-Cookie": sessionCookie },
             )
           }
 
-          const studentSessionCookie = await createStudentSession(
+          const existingRequest = await client.query(
+            `SELECT id,status,requested_at
+             FROM second_checkin_requests
+             WHERE student_id=$1 AND attendance_date=$2
+               AND status IN ('pending','approved','rejected')
+             ORDER BY id DESC LIMIT 1 FOR UPDATE`,
+            [student.id, date],
+          )
+
+          if (existingRequest.rows[0]?.status === "rejected") {
+            await client.query("COMMIT")
+            return send(res, 403, {
+              error: "Your second login request was rejected by an administrator.",
+              code: "SECOND_CHECK_IN_REJECTED",
+            })
+          }
+
+          if (existingRequest.rows[0]?.status === "approved") {
+            const request = existingRequest.rows[0]
+            const sessionCookie = await createStudentSession(
+              client,
+              student.id,
+              originalAttendance.id,
+            )
+            await client.query("COMMIT")
+
+            return send(
+              res,
+              200,
+              {
+                attendance: {
+                  id: Number(originalAttendance.id),
+                  markedAt: originalAttendance.entry_time,
+                  exitTime: originalAttendance.exit_time,
+                  status: "second_check_in_approved",
+                },
+                secondCheckInRequest: {
+                  id: Number(request.id),
+                  requestedAt: request.requested_at,
+                  status: "approved",
+                },
+              },
+              { "Set-Cookie": sessionCookie },
+            )
+          }
+
+          const request =
+            existingRequest.rows[0] ??
+            (
+              await client.query(
+                `INSERT INTO second_checkin_requests(
+                   student_id,attendance_date,original_attendance_id
+                 ) VALUES($1,$2,$3)
+                 ON CONFLICT DO NOTHING
+                 RETURNING id,requested_at`,
+                [student.id, date, originalAttendance.id],
+              )
+            ).rows[0]
+
+          const pendingRequest = request
+            ? { id: request.id, requested_at: request.requested_at }
+            : (
+                await client.query(
+                  `SELECT id,requested_at
+                   FROM second_checkin_requests
+                   WHERE student_id=$1 AND attendance_date=$2 AND status='pending'
+                   ORDER BY id DESC LIMIT 1`,
+                  [student.id, date],
+                )
+              ).rows[0]
+
+          if (!pendingRequest) {
+            throw new Error("Unable to create or retrieve the pending request.")
+          }
+
+          const sessionCookie = await createStudentSession(
             client,
             student.id,
-            existing.rows[0].id,
+            originalAttendance.id,
+          )
+          await client.query("COMMIT")
+
+          return send(
+            res,
+            202,
+            {
+              attendance: {
+                id: Number(originalAttendance.id),
+                markedAt: originalAttendance.entry_time,
+                exitTime: originalAttendance.exit_time,
+                status: "second_check_in_pending",
+              },
+              secondCheckInRequest: {
+                id: Number(pendingRequest.id),
+                requestedAt: pendingRequest.requested_at,
+                status: "pending",
+              },
+            },
+            { "Set-Cookie": sessionCookie },
+          )
+        } catch (error) {
+          await client.query("ROLLBACK")
+
+          throw error
+        } finally {
+          client.release()
+        }
+      }
+
+      if (
+        req.method === "POST" &&
+        url.pathname === "/api/attendance/second-check-in/complete"
+      ) {
+        requireCsrf(req)
+
+        if (!studentSessionHash) {
+          return send(res, 401, {
+            error: "Student check-in is required.",
+            code: "STUDENT_SESSION_REQUIRED",
+          })
+        }
+
+        const client = await pool.connect()
+
+        try {
+          await client.query("BEGIN")
+
+          const session = await client.query(
+            `SELECT ss.student_id,ss.attendance_id,ss.second_checkin_id,s.active
+             FROM student_sessions ss
+             JOIN students s ON s.id=ss.student_id
+             WHERE ss.token_hash=$1 AND ss.expires_at>NOW()
+             FOR UPDATE OF ss,s`,
+            [studentSessionHash],
+          )
+
+          if (!session.rowCount) {
+            await client.query("ROLLBACK")
+            return send(res, 401, {
+              error: "Student check-in is required.",
+              code: "STUDENT_SESSION_REQUIRED",
+            })
+          }
+
+          const {
+            student_id: studentId,
+            attendance_id: attendanceId,
+          } = session.rows[0]
+
+          if (!session.rows[0].active) {
+            await client.query("ROLLBACK")
+            return send(res, 403, {
+              error: "This student is inactive and cannot mark attendance.",
+              code: "STUDENT_INACTIVE",
+            })
+          }
+
+          const date = businessDate()
+          const currentSecond = await client.query(
+            `SELECT id,entry_time,exit_time,original_attendance_id
+             FROM attendance_second_checkins
+             WHERE student_id=$1 AND attendance_date=$2
+             FOR UPDATE`,
+            [studentId, date],
+          )
+
+          if (currentSecond.rowCount) {
+            const second = currentSecond.rows[0]
+            if (
+              String(second.original_attendance_id) !== String(attendanceId)
+            ) {
+              await client.query("ROLLBACK")
+              return send(res, 409, {
+                error: "This session does not match today's approved check-in.",
+                code: "SECOND_CHECK_IN_SESSION_MISMATCH",
+              })
+            }
+            await client.query(
+              `UPDATE student_sessions
+               SET second_checkin_id=$1
+               WHERE student_id=$2 AND attendance_id=$3 AND expires_at>NOW()`,
+              [second.id, studentId, attendanceId],
+            )
+            await client.query("COMMIT")
+            return send(res, 200, {
+              attendance: {
+                id: Number(second.id),
+                markedAt: second.entry_time,
+                exitTime: second.exit_time,
+                status: second.exit_time
+                  ? "already_completed"
+                  : "already_checked_in",
+              },
+            })
+          }
+
+          const approvedRequest = await client.query(
+            `SELECT id,original_attendance_id
+             FROM second_checkin_requests
+             WHERE student_id=$1 AND attendance_date=$2 AND status='approved'
+             ORDER BY id DESC LIMIT 1 FOR UPDATE`,
+            [studentId, date],
+          )
+
+          if (!approvedRequest.rowCount) {
+            const pendingRequest = await client.query(
+              `SELECT id FROM second_checkin_requests
+               WHERE student_id=$1 AND attendance_date=$2 AND status='pending'
+               ORDER BY id DESC LIMIT 1`,
+              [studentId, date],
+            )
+            await client.query("ROLLBACK")
+            return send(res, 409, {
+              error: pendingRequest.rowCount
+                ? "Second Check-In Pending Admin Approval."
+                : "There is no approved second check-in request for today.",
+              code: pendingRequest.rowCount
+                ? "SECOND_CHECK_IN_PENDING"
+                : "SECOND_CHECK_IN_NOT_APPROVED",
+            })
+          }
+
+          const request = approvedRequest.rows[0]
+          if (String(request.original_attendance_id) !== String(attendanceId)) {
+            await client.query("ROLLBACK")
+            return send(res, 409, {
+              error: "The approved request does not match this attendance session.",
+              code: "SECOND_CHECK_IN_SESSION_MISMATCH",
+            })
+          }
+
+          const inserted = await client.query(
+            `INSERT INTO attendance_second_checkins(
+               student_id,attendance_date,original_attendance_id,request_id,entry_time
+             ) VALUES($1,$2,$3,$4,clock_timestamp())
+             ON CONFLICT(student_id,attendance_date) DO NOTHING
+             RETURNING id,entry_time,exit_time`,
+            [studentId, date, attendanceId, request.id],
+          )
+
+          if (!inserted.rowCount) {
+            throw new Error("Approved second check-in was not recorded.")
+          }
+
+          await client.query(
+            `UPDATE second_checkin_requests
+             SET status='completed' WHERE id=$1 AND status='approved'`,
+            [request.id],
+          )
+
+          await client.query(
+            `UPDATE student_sessions
+             SET second_checkin_id=$1,
+                 expires_at=NOW()+($2 * INTERVAL '1 hour')
+             WHERE student_id=$3 AND attendance_id=$4 AND expires_at>NOW()`,
+            [
+              inserted.rows[0].id,
+              STUDENT_SESSION_HOURS,
+              studentId,
+              attendanceId,
+            ],
           )
 
           await client.query("COMMIT")
 
           return send(
             res,
-            200,
+            201,
             {
               attendance: {
-                id: Number(existing.rows[0].id),
-                markedAt: existing.rows[0].entry_time,
+                id: Number(inserted.rows[0].id),
+                markedAt: inserted.rows[0].entry_time,
                 exitTime: null,
-                status: "already_checked_in",
+                status: "second_entry_recorded",
               },
             },
-            { "Set-Cookie": studentSessionCookie },
+            { "Set-Cookie": studentSessionCookie(studentSessionToken) },
           )
         } catch (error) {
           await client.query("ROLLBACK")
-
           throw error
         } finally {
           client.release()
@@ -1889,7 +2198,7 @@ export function createPostgresApiServer({
           await client.query("BEGIN")
 
           const session = await client.query(
-            `SELECT ss.attendance_id,a.exit_time
+            `SELECT ss.attendance_id,ss.second_checkin_id,a.exit_time
              FROM student_sessions ss
              JOIN students s ON s.id=ss.student_id
              JOIN attendance a ON a.id=ss.attendance_id
@@ -1907,7 +2216,28 @@ export function createPostgresApiServer({
             })
           }
 
-          if (session.rows[0].exit_time) {
+          let exitTime = session.rows[0].exit_time
+          if (session.rows[0].second_checkin_id) {
+            const second = await client.query(
+              `SELECT exit_time
+               FROM attendance_second_checkins
+               WHERE id=$1 AND student_id=(
+                 SELECT student_id FROM student_sessions WHERE token_hash=$2
+               )
+               FOR UPDATE`,
+              [session.rows[0].second_checkin_id, studentSessionHash],
+            )
+            if (!second.rowCount) {
+              await client.query("ROLLBACK")
+              return send(res, 401, {
+                error: "Student check-in is required before checking out.",
+                code: "STUDENT_SESSION_REQUIRED",
+              })
+            }
+            exitTime = second.rows[0].exit_time
+          }
+
+          if (exitTime) {
             await client.query("COMMIT")
             return send(res, 409, {
               error: "This attendance is already checked out.",
@@ -1915,13 +2245,21 @@ export function createPostgresApiServer({
             })
           }
 
-          const updated = await client.query(
-            `UPDATE attendance
-             SET exit_time=clock_timestamp(),status='completed',updated_at=NOW()
-             WHERE id=$1 AND exit_time IS NULL
-             RETURNING id,exit_time`,
-            [session.rows[0].attendance_id],
-          )
+          const updated = session.rows[0].second_checkin_id
+            ? await client.query(
+                `UPDATE attendance_second_checkins
+                 SET exit_time=clock_timestamp()
+                 WHERE id=$1 AND exit_time IS NULL
+                 RETURNING id,exit_time`,
+                [session.rows[0].second_checkin_id],
+              )
+            : await client.query(
+                `UPDATE attendance
+                 SET exit_time=clock_timestamp(),status='completed',updated_at=NOW()
+                 WHERE id=$1 AND exit_time IS NULL
+                 RETURNING id,exit_time`,
+                [session.rows[0].attendance_id],
+              )
 
           if (!updated.rowCount) {
             await client.query("ROLLBACK")
@@ -1931,12 +2269,14 @@ export function createPostgresApiServer({
             })
           }
 
-          await client.query(
-            `UPDATE attendance_sync_outbox
-             SET synced_at=NULL,next_attempt_at=NOW(),locked_until=NULL
-             WHERE attendance_id=$1`,
-            [session.rows[0].attendance_id],
-          )
+          if (!session.rows[0].second_checkin_id) {
+            await client.query(
+              `UPDATE attendance_sync_outbox
+               SET synced_at=NULL,next_attempt_at=NOW(),locked_until=NULL
+               WHERE attendance_id=$1`,
+              [session.rows[0].attendance_id],
+            )
+          }
 
           await client.query("COMMIT")
 
@@ -1947,6 +2287,75 @@ export function createPostgresApiServer({
               status: "completed",
             },
           })
+        } catch (error) {
+          await client.query("ROLLBACK")
+          throw error
+        } finally {
+          client.release()
+        }
+      }
+
+      if (
+        url.pathname === "/api/admin/second-check-in-requests" &&
+        req.method === "GET"
+      ) {
+        const result = await pool.query(
+          `SELECT r.id,r.requested_at,r.status,r.processed_at,
+                  r.attendance_date,s.register_number,s.name
+           FROM second_checkin_requests r
+           JOIN students s ON s.id=r.student_id
+           ORDER BY (r.status='pending') DESC,r.requested_at DESC,r.id DESC`,
+        )
+
+        return send(res, 200, {
+          requests: result.rows.map((request) => ({
+            ...request,
+            id: Number(request.id),
+          })),
+        })
+      }
+
+      const secondCheckInRequestMatch = url.pathname.match(
+        /^\/api\/admin\/second-check-in-requests\/(\d+)\/(approve|reject)$/,
+      )
+
+      if (secondCheckInRequestMatch && req.method === "POST") {
+        const client = await pool.connect()
+
+        try {
+          await client.query("BEGIN")
+
+          const request = await client.query(
+            `SELECT id FROM second_checkin_requests
+             WHERE id=$1 AND status='pending' FOR UPDATE`,
+            [secondCheckInRequestMatch[1]],
+          )
+
+          if (!request.rowCount) {
+            await client.query("ROLLBACK")
+            return send(res, 404, {
+              error: "Pending second check-in request not found.",
+              code: "REQUEST_NOT_FOUND",
+            })
+          }
+
+          const status =
+            secondCheckInRequestMatch[2] === "approve"
+              ? "approved"
+              : "rejected"
+          const processed = await client.query(
+            `UPDATE second_checkin_requests
+             SET status=$1,processed_by=$2,processed_at=clock_timestamp()
+             WHERE id=$3 AND status='pending'`,
+            [status, admin.id, request.rows[0].id],
+          )
+
+          if (processed.rowCount !== 1) {
+            throw new Error("Second check-in request was not processed.")
+          }
+
+          await client.query("COMMIT")
+          return send(res, 200, { success: true, status })
         } catch (error) {
           await client.query("ROLLBACK")
           throw error

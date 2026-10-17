@@ -141,6 +141,16 @@ export type ExitRequest = {
   attendance_id: number
 }
 
+export type SecondCheckInRequest = {
+  id: number
+  requested_at: string
+  status: "pending" | "approved" | "rejected" | "completed"
+  processed_at: string | null
+  attendance_date: string
+  register_number: string
+  name: string
+}
+
 export type StudentAttendance = {
   id: number
   entryTime: string
@@ -153,8 +163,27 @@ type AttendanceMarkResponse = {
     id: number
     markedAt: string
     exitTime: string | null
-    status: "entry_recorded" | "already_checked_in" | "already_completed"
+    status:
+      | "entry_recorded"
+      | "already_checked_in"
+      | "already_completed"
+      | "second_check_in_pending"
+      | "second_check_in_approved"
+      | "second_entry_recorded"
   }
+  secondCheckInRequest?: {
+    id: number
+    requestedAt: string
+    status: "pending" | "approved"
+  }
+}
+
+type StudentSessionResponse = {
+  attendance: StudentAttendance
+  secondCheckInRequest: {
+    status: "pending" | "approved" | "rejected" | "completed"
+    requestedAt: string
+  } | null
 }
 
 type CheckOutResponse = {
@@ -502,7 +531,13 @@ export const attendanceApi = {
     }),
 
   studentSession: () =>
-    request<{ attendance: StudentAttendance }>("/api/attendance/session"),
+    request<StudentSessionResponse>("/api/attendance/session"),
+
+  completeSecondCheckIn: () =>
+    request<AttendanceMarkResponse>(
+      "/api/attendance/second-check-in/complete",
+      { method: "POST" },
+    ),
 
   checkOut: () =>
     request<CheckOutResponse>("/api/attendance/check-out", {
@@ -531,6 +566,17 @@ export const attendanceApi = {
     request<ExitRequestResult>(
       `/api/admin/exit-requests/${id}/${action}`,
 
+      { method: "POST" },
+    ),
+
+  secondCheckInRequests: () =>
+    request<{ requests: SecondCheckInRequest[] }>(
+      "/api/admin/second-check-in-requests",
+    ),
+
+  processSecondCheckInRequest: (id: number, action: "approve" | "reject") =>
+    request<ExitRequestResult>(
+      `/api/admin/second-check-in-requests/${id}/${action}`,
       { method: "POST" },
     ),
 
