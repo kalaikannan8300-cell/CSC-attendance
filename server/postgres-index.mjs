@@ -65,6 +65,65 @@ function httpError(status, code, message) {
   return Object.assign(new Error(message), { status, code })
 }
 
+const transientDatabaseCodes = new Set([
+  "ECONNRESET",
+  "ECONNREFUSED",
+  "ENOTFOUND",
+  "EPIPE",
+  "ECONNABORTED",
+  "ETIMEDOUT",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+  "57P01",
+  "57P02",
+  "57P03",
+])
+
+function isTransientDatabaseError(error) {
+  if (!error || typeof error !== "object") return false
+
+  const code = typeof error.code === "string" ? error.code : ""
+  if (code.startsWith("08") || transientDatabaseCodes.has(code)) return true
+
+  const message = typeof error.message === "string" ? error.message : ""
+  if (
+    /connection terminated unexpectedly|client has encountered a connection error|connection is closed|socket hang up|ECONNRESET|ECONNREFUSED|ENOTFOUND|ETIMEDOUT|EPIPE/i.test(
+      message,
+    )
+  ) {
+    return true
+  }
+
+  return error.cause ? isTransientDatabaseError(error.cause) : false
+}
+
+async function queryReadWithTransientRetry(pool, query, values) {
+  try {
+    return await pool.query(query, values)
+  } catch (error) {
+    if (!isTransientDatabaseError(error)) throw error
+
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    return pool.query(query, values)
+  }
+}
+
+function postgresPoolOptions(connectionString) {
+  const hostname = new URL(connectionString).hostname
+
+  return {
+    connectionString,
+    ssl: ["localhost", "127.0.0.1", "::1", "[::1]"].includes(hostname)
+      ? false
+      : { rejectUnauthorized: true },
+    max: 5,
+    idleTimeoutMillis: 10000,
+    connectionTimeoutMillis: 10000,
+    keepAlive: true,
+    keepAliveInitialDelayMillis: 5000,
+  }
+}
+
 async function readBody(req, limit) {
   const chunks = []
 
@@ -711,7 +770,13 @@ export async function processSyncQueue(pool) {
 
     await client.query("COMMIT")
   } catch (error) {
-    await client.query("ROLLBACK")
+    try {
+      await client.query("ROLLBACK")
+    } catch {
+      if (!isTransientDatabaseError(error)) {
+        throw error
+      }
+    }
 
     throw error
   } finally {
@@ -746,9 +811,11 @@ export async function processSyncQueue(pool) {
 
 function startSyncWorker(pool) {
   let running = false
+  let consecutiveFailures = 0
+  let retryAt = 0
 
   const timer = setInterval(async () => {
-    if (running) return
+    if (running || Date.now() < retryAt) return
 
     running = true
 
@@ -758,8 +825,20 @@ function startSyncWorker(pool) {
         count < 10 && (await processSyncQueue(pool));
         count += 1
       ) {}
+      consecutiveFailures = 0
+      retryAt = 0
     } catch (error) {
       console.error("Attendance sync worker failed:", error.message)
+      if (!isTransientDatabaseError(error)) {
+        clearInterval(timer)
+      } else {
+        consecutiveFailures += 1
+        const delay = Math.min(
+          5 * 60 * 1000,
+          15000 * 2 ** Math.min(consecutiveFailures - 1, 5),
+        )
+        retryAt = Date.now() + delay
+      }
     } finally {
       running = false
     }
@@ -813,11 +892,7 @@ export async function processCloudinaryCleanup(pool) {
     } else {
       try {
         await cloudinaryDelete(publicId)
-        await client.query(
-          "DELETE FROM cloudinary_asset_cleanup WHERE public_id=$1",
-          [publicId],
-        )
-      } catch (error) {
+      } catch {
         const delaySeconds = Math.min(
           60 * 60,
           30 * 2 ** Math.min(Number(attempts), 7),
@@ -828,16 +903,19 @@ export async function processCloudinaryCleanup(pool) {
                next_attempt_at=NOW()+($2 * INTERVAL '1 second'),
                last_error=$3
            WHERE public_id=$1`,
-          [publicId, delaySeconds, String(error.message).slice(0, 1000)],
+          [publicId, delaySeconds, "Cloudinary asset deletion request failed."],
         )
         console.error(
-          `Cloudinary cleanup failed for ${publicId}:`,
-          error.message,
+          "Cloudinary asset deletion failed; cleanup queued for retry.",
         )
         await client.query("COMMIT")
         transactionOpen = false
         return false
       }
+      await client.query(
+        "DELETE FROM cloudinary_asset_cleanup WHERE public_id=$1",
+        [publicId],
+      )
     }
 
     await client.query("COMMIT")
@@ -859,9 +937,11 @@ export async function processCloudinaryCleanup(pool) {
 
 function startCloudinaryCleanupWorker(pool) {
   let running = false
+  let consecutiveFailures = 0
+  let retryAt = 0
 
   const timer = setInterval(async () => {
-    if (running) return
+    if (running || Date.now() < retryAt) return
     running = true
 
     try {
@@ -870,8 +950,20 @@ function startCloudinaryCleanupWorker(pool) {
         count < 10 && (await processCloudinaryCleanup(pool));
         count += 1
       ) {}
+      consecutiveFailures = 0
+      retryAt = 0
     } catch (error) {
       console.error("Cloudinary cleanup worker failed:", error.message)
+      if (!isTransientDatabaseError(error)) {
+        clearInterval(timer)
+      } else {
+        consecutiveFailures += 1
+        const delay = Math.min(
+          5 * 60 * 1000,
+          15000 * 2 ** Math.min(consecutiveFailures - 1, 5),
+        )
+        retryAt = Date.now() + delay
+      }
     } finally {
       running = false
     }
@@ -914,18 +1006,7 @@ async function loadMonthlyAttendanceReport(pool, month) {
       pool.query("SELECT working_days FROM attendance_calendar_settings WHERE id=1"),
     ])
   } catch (error) {
-    const connectionCodes = new Set([
-      "ECONNRESET",
-      "ECONNREFUSED",
-      "ENOTFOUND",
-      "ETIMEDOUT",
-      "57P01",
-      "57P03",
-    ])
-    if (
-      typeof error.code === "string" &&
-      (error.code.startsWith("08") || connectionCodes.has(error.code))
-    ) {
+    if (isTransientDatabaseError(error)) {
       throw Object.assign(
         httpError(
           503,
@@ -1010,21 +1091,7 @@ export function createPostgresApiServer({
     )
   }
 
-  const pool =
-    suppliedPool ??
-    new Pool({
-      connectionString,
-
-      ssl: connectionString.includes("localhost")
-        ? false
-        : { rejectUnauthorized: true },
-
-      max: 10,
-
-      idleTimeoutMillis: 30000,
-
-      connectionTimeoutMillis: 10000,
-    })
+  const pool = suppliedPool ?? new Pool(postgresPoolOptions(connectionString))
   pool.on("connect", (client) => {
     client.on("error", (error) => {
       const code = error.code ? ` (${error.code})` : ""
@@ -1048,7 +1115,7 @@ export function createPostgresApiServer({
       if (!url.pathname.startsWith("/api/")) return await serveStatic(req, res)
 
       if (req.method === "GET" && url.pathname === "/api/health") {
-        await pool.query("SELECT 1")
+        await queryReadWithTransientRetry(pool, "SELECT 1")
 
         return send(res, 200, { status: "ok", database: "postgresql" })
       }
@@ -1174,7 +1241,8 @@ export function createPostgresApiServer({
           })
         }
 
-        const result = await pool.query(
+        const result = await queryReadWithTransientRetry(
+          pool,
           `SELECT COALESCE(sc.id,a.id) AS id,
                   COALESCE(sc.entry_time,a.entry_time) AS entry_time,
                   CASE WHEN ss.second_checkin_id IS NOT NULL
@@ -1239,7 +1307,8 @@ export function createPostgresApiServer({
       if (protectedPath && req.method !== "GET") requireCsrf(req)
 
       if (req.method === "GET" && url.pathname === "/api/promotions") {
-        const result = await pool.query(
+        const result = await queryReadWithTransientRetry(
+          pool,
           "SELECT * FROM promotional_images WHERE enabled=TRUE ORDER BY display_order,id",
         )
 
@@ -3023,25 +3092,37 @@ export function createPostgresApiServer({
 
       return send(res, 404, { error: "Not found." })
     } catch (error) {
-      const status = Number.isInteger(error.status) ? error.status : 500
+      const databaseUnavailable = isTransientDatabaseError(error)
+      const status = Number.isInteger(error.status)
+        ? error.status
+        : databaseUnavailable
+          ? 503
+          : 500
+      const errorCode = databaseUnavailable
+        ? "DATABASE_UNAVAILABLE"
+        : error.code
 
       if (status >= 500)
         console.error(
-          `PostgreSQL API error (${req.method} ${req.url?.split("?")[0] ?? "/"}, ${error.code ?? "UNEXPECTED_ERROR"}):`,
-          error.cause?.message ?? error.message,
+          `PostgreSQL API error (${req.method} ${req.url?.split("?")[0] ?? "/"}, ${errorCode ?? "UNEXPECTED_ERROR"}):`,
+          databaseUnavailable
+            ? "Transient database connection failure."
+            : error.cause?.message ?? error.message,
         )
 
       if (res.headersSent) return res.destroy(error)
 
       return send(res, status, {
         error:
-          error.code === "IMAGE_STORAGE_NOT_CONFIGURED"
-            ? error.message
-            : status >= 500
-              ? "An unexpected server error occurred."
-              : error.message,
+          errorCode === "DATABASE_UNAVAILABLE"
+            ? "Database is temporarily unavailable. Please try again."
+            : errorCode === "IMAGE_STORAGE_NOT_CONFIGURED"
+              ? error.message
+              : status >= 500
+                ? "An unexpected server error occurred."
+                : error.message,
 
-        ...(error.code ? { code: error.code } : {}),
+        ...(errorCode ? { code: errorCode } : {}),
       })
     }
   })
@@ -3082,13 +3163,7 @@ async function bootstrap() {
     )
   }
 
-  const pool = new Pool({
-    connectionString,
-
-    ssl: connectionString.includes("localhost")
-      ? false
-      : { rejectUnauthorized: true },
-  })
+  const pool = new Pool(postgresPoolOptions(connectionString))
 
   try {
     await initializeDatabase(pool)
