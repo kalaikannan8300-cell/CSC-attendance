@@ -37,6 +37,9 @@ button:focus-visible, input:focus-visible { outline: 3px solid rgba(76, 116, 94,
 .student-login-brand .brand { width: 100%; max-width: 180px; height: auto; min-height: 0; overflow: hidden; border-radius: 16px; box-shadow: 0 2px 12px rgba(14, 19, 16, .09); }
 .student-login-brand .brand img { width: 100%; max-width: 180px; height: auto; object-fit: contain; }
 .login-content { width: min(100%, 450px); margin: auto; }
+.pending-back-row { margin: 0 0 24px; }
+.pending-back-row .button { width: auto; }
+.pending-back-row .back-arrow { font-size: 18px; line-height: 1; }
 .india-clock { margin: 0 0 20px; display: flex; align-items: center; justify-content: center; gap: 8px; color: #68766f; font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .india-clock svg { width: 16px; height: 16px; }
 .login-heading { margin-bottom: 38px; }

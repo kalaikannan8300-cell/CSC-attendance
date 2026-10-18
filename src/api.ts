@@ -174,13 +174,14 @@ type AttendanceMarkResponse = {
   secondCheckInRequest?: {
     id: number
     requestedAt: string
-    status: "pending" | "approved"
+    status: "pending" | "approved" | "rejected" | "completed"
   }
 }
 
 type StudentSessionResponse = {
   attendance: StudentAttendance
   secondCheckInRequest: {
+    id: number
     status: "pending" | "approved" | "rejected" | "completed"
     requestedAt: string
   } | null
@@ -524,10 +525,10 @@ export type PromotionRecord = {
 }
 
 export const attendanceApi = {
-  mark: (registerNumber: string) =>
+  mark: (registerNumber: string, attemptId: string) =>
     request<AttendanceMarkResponse>("/api/attendance", {
       method: "POST",
-      body: JSON.stringify({ registerNumber }),
+      body: JSON.stringify({ registerNumber, attemptId }),
     }),
 
   studentSession: () =>
