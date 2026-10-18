@@ -3116,12 +3116,26 @@ async function bootstrap() {
   }
 }
 
+export function staticCacheControl(pathname, search = "") {
+  if (pathname === "/" || pathname === "/index.html") return "no-cache"
+
+  const hasVersion = new URLSearchParams(search).has("v")
+  const hasContentHash =
+    pathname.startsWith("/assets/") &&
+    /-[\da-z_-]{8,}\.[a-z\d]+$/i.test(pathname)
+
+  if (pathname.startsWith("/assets/") && (hasVersion || hasContentHash)) {
+    return "public, max-age=31536000, immutable"
+  }
+
+  return "public, max-age=3600"
+}
+
 async function serveStatic(req, res) {
   const root = resolve(process.cwd(), "dist")
 
-  let requested = decodeURIComponent(
-    new URL(req.url ?? "/", "http://localhost").pathname,
-  )
+  const url = new URL(req.url ?? "/", "http://localhost")
+  let requested = decodeURIComponent(url.pathname)
 
   if (requested === "/") requested = "/index.html"
 
@@ -3163,6 +3177,7 @@ async function serveStatic(req, res) {
 
     res.writeHead(200, {
       "Content-Type": contentType,
+      "Cache-Control": staticCacheControl(requested, url.search),
       "X-Content-Type-Options": "nosniff",
     })
 
@@ -3173,6 +3188,7 @@ async function serveStatic(req, res) {
 
       res.writeHead(200, {
         "Content-Type": "text/html; charset=utf-8",
+        "Cache-Control": "no-cache",
         "X-Content-Type-Options": "nosniff",
       })
 

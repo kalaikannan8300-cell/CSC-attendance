@@ -1,4 +1,3 @@
-@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@500;600;700&display=swap');
 @import 'tailwindcss';
 
 :root {
@@ -23,8 +22,10 @@ button:focus-visible, input:focus-visible { outline: 3px solid rgba(76, 116, 94,
 
 .student-shell { min-height: 100vh; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); background: white; }
 .promo-panel { min-height: 100vh; position: relative; background-color: #f4f5f2; background-position: center; background-size: cover; isolation: isolate; transition: background-image .45s ease; }
+.promo-panel-image { position: absolute; z-index: -2; inset: 0; width: 100%; height: 100%; display: block; object-fit: cover; object-position: center; }
 .promo-overlay { position: absolute; inset: 0; z-index: -1; background: linear-gradient(180deg, rgba(8, 14, 11, .18) 0%, rgba(8, 14, 11, .04) 40%, rgba(8, 14, 11, .22) 100%); }
 .brand { width: 160px; height: 92px; display: grid; place-items: center; overflow: hidden; background: white; border-radius: 12px; box-shadow: 0 2px 12px rgba(14, 19, 16, .09); }
+.brand picture { width: 100%; height: 100%; display: block; }
 .brand img { width: 100%; height: 100%; display: block; object-fit: contain; }
 .view-switch { padding: 4px; display: flex; gap: 3px; background: #f1f2ef; border-radius: 12px; }
 .view-switch button { border: 0; background: transparent; color: var(--muted); border-radius: 9px; padding: 8px 14px; font-size: 12px; font-weight: 600; }
@@ -103,6 +104,7 @@ button:focus-visible, input:focus-visible { outline: 3px solid rgba(76, 116, 94,
 .sidebar nav svg { width: 18px; }
 .sidebar-profile { margin-top: auto; padding-top: 20px; display: grid; grid-template-columns: 36px 1fr auto; align-items: center; gap: 10px; border-top: 1px solid rgba(255,255,255,.1); }
 .avatar { width: 36px; height: 36px; display: grid; place-items: center; overflow: hidden; border: 1px solid rgba(255,255,255,.35); border-radius: 50%; background: white; }
+.avatar picture { display: contents; }
 .avatar img { width: 190%; max-width: none; height: auto; display: block; }
 .sidebar-profile div:nth-child(2) { min-width: 0; display: grid; gap: 2px; }
 .sidebar-profile strong { font-size: 11px; }
